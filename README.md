@@ -62,6 +62,8 @@ Patterns implementation is based or using following libraries:
 - [Opossum](https://github.com/nodeshift/opossum)
 - [Axios Retry](https://github.com/softonic/axios-retry)
 - [Ofetch](https://github.com/unjs/ofetch)
+- [Keyv](https://github.com/jaredwray/keyv)
+- [P-Retry](https://github.com/sindresorhus/p-retry)
 
 ## License
 
