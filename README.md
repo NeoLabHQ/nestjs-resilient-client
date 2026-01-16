@@ -24,6 +24,28 @@ Implements following resilience patterns:
 - OpenTelemetry - Deep integration with OpenTelemetry
 - Zero-configuration - By default enabled resilence setup that suitable for majority of workloads
 
+## Development
+
+- Install dependencies:
+
+```bash
+npm install
+```
+
+- Run the unit tests:
+
+```bash
+npm run test
+```
+
+- Build the library:
+
+```bash
+npm run build
+```
+
+
+
 ## Special Thanks
 
 Library esentially is reimplementation of following libraries for NestJS:
@@ -39,6 +61,7 @@ Patterns implementation is based or using following libraries:
 - [Cockatiel](https://github.com/connor4312/cockatiel)
 - [Opossum](https://github.com/nodeshift/opossum)
 - [Axios Retry](https://github.com/softonic/axios-retry)
+- [Ofetch](https://github.com/unjs/ofetch)
 
 ## License
 
