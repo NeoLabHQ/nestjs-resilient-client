@@ -12,10 +12,13 @@ Implements following resilience patterns:
 - Rate Limiter - Token bucket and leaky bucket implementations
 - Time Limiter - Timeout handling with cancellation support
 - Bulkhead - Thread-pool and semaphore isolation to limit concurrent calls
+- Throttling - Limit the number of requests to a service
 - Fallback - Graceful degradation strategies
 - Conditional Retries - Fine-grained control via retry_if_exception, retry_if_result
 - Stop Strategies - stop_after_attempt, stop_after_delay, stop_never
 - Wait Strategies - Fixed, exponential, random, and custom wait functions
+- Health Checks - Health checks for the service
+- Deduplication - Deduplicate requests to the same endpoint
 - Before/After Hooks - Logging and metrics integration points
 
 ## Additional features
@@ -64,6 +67,11 @@ Patterns implementation is based or using following libraries:
 - [Ofetch](https://github.com/unjs/ofetch)
 - [Keyv](https://github.com/jaredwray/keyv)
 - [P-Retry](https://github.com/sindresorhus/p-retry)
+- [NestJS Resilience](https://github.com/SocketSomeone/nestjs-resilience)
+- [NestJS OpenTelemetry](https://github.com/MetinSeylan/Nestjs-OpenTelemetry)
+- [NestJS OTEL](https://github.com/pragmaticivan/nestjs-otel)
+- [NestJS Omacache](https://github.com/BJS-kr/nestjs-omacache)
+- [NestJS HTTP Promise](https://github.com/benhason1/nestjs-http-promise)
 
 ## License
 
