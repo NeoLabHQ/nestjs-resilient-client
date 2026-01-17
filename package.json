@@ -1,5 +1,5 @@
 {
-  "name": "nest-http-client",
+  "name": "nestjs-http-client",
   "type": "module",
   "version": "0.1.0",
   "description": "Zero-configuration resilience and transient-fault-handling HTTP Client that wraps official @nestjs/axios library",
