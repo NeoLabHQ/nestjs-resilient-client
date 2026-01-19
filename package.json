@@ -1,25 +1,23 @@
 {
   "name": "nestjs-http-client",
-  "type": "module",
   "version": "0.1.0",
   "description": "Zero-configuration resilience and transient-fault-handling HTTP Client that wraps official @nestjs/axios library",
   "author": "Vlad Goncharov <leovs010@gmail.com>",
   "license": "AGPL-3.0",
-  "homepage": "https://github.com/neolabhq/nest-http-client#readme",
+  "homepage": "https://github.com/NeoLabHQ/nestjs-log-decorator#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/neolabhq/nest-http-client.git"
+    "url": "https://github.com/NeoLabHQ/nestjs-log-decorator"
   },
   "bugs": {
-    "url": "https://github.com/neolabhq/nest-http-client/issues"
+    "url": "https://github.com/NeoLabHQ/nestjs-log-decorator/issues"
   },
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./dist/index.cjs",
     "./package.json": "./package.json"
   },
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.cts",
   "files": [
     "dist"
   ],
@@ -29,14 +27,31 @@
     "dev": "concurrently -c auto --names build,test npm:build:watch npm:test",
     "test": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "npm run build",
+    "commit": "cz help",
+    "cz": "git add . && cz"
   },
   "devDependencies": {
+    "@semantic-release/git": "^10.0.1",
     "@types/node": "^25.0.3",
     "bumpp": "^10.3.2",
     "concurrently": "^9.2.1",
+    "cz-conventional-changelog": "^3.3.0",
     "tsdown": "^0.18.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.16"
+  },
+  "peerDependencies": {
+    "@nestjs/axios": "^4.0.1",
+    "@nestjs/common": "^11.1.12"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "dependencies": {
+    "nestjs-log-decorator": "^1.0.0",
+    "p-retry": "^7.1.1"
   }
 }

@@ -1,10 +1,16 @@
 # NestJS HTTP Client
 
-Zero-configuration resilience and transient-fault-handling HTTP Client that wraps official @nestjs/axios library
+Zero-configuration resilience and transient-fault-handling HTTP Client that extends official @nestjs/axios library.
 
-## Patterns
+## Features
 
-Implements following resilience patterns:
+- Caching - In-memory and distributed caching
+- OpenTelemetry - Deep integration with OpenTelemetry
+- Zero-configuration - By default enabled resilence setup that suitable for majority of workloads
+
+## Resilience Patterns
+
+Client implements following resilience patterns:
 
 - Retry - Supports sync/async operations with exponential backoff, jitter, and custom retry conditions
 - Circuit Breaker - Configurable failure rate thresholds, slow call detection, and half-open state management
@@ -20,34 +26,6 @@ Implements following resilience patterns:
 - Health Checks - Health checks for the service
 - Deduplication - Deduplicate requests to the same endpoint
 - Before/After Hooks - Logging and metrics integration points
-
-## Additional features
-
-- Cache - In-memory and distributed caching
-- OpenTelemetry - Deep integration with OpenTelemetry
-- Zero-configuration - By default enabled resilence setup that suitable for majority of workloads
-
-## Development
-
-- Install dependencies:
-
-```bash
-npm install
-```
-
-- Run the unit tests:
-
-```bash
-npm run test
-```
-
-- Build the library:
-
-```bash
-npm run build
-```
-
-
 
 ## Special Thanks
 
@@ -72,7 +50,3 @@ Patterns implementation is based or using following libraries:
 - [NestJS OTEL](https://github.com/pragmaticivan/nestjs-otel)
 - [NestJS Omacache](https://github.com/BJS-kr/nestjs-omacache)
 - [NestJS HTTP Promise](https://github.com/benhason1/nestjs-http-promise)
-
-## License
-
-GNU Affero General Public License v3.0

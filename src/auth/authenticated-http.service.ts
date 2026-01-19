@@ -1,10 +1,9 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { AxiosRequestConfig, AxiosResponse, isAxiosError } from 'axios';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { type AxiosRequestConfig, type AxiosResponse, isAxiosError } from 'axios';
+import { Log } from 'nestjs-log-decorator';
 import pRetry from 'p-retry';
 import { firstValueFrom, Observable } from 'rxjs';
-
-import { prettifyAxiosError } from './axios.logger';
 
 export interface AuthConfig<TRequest = unknown, TResponse = unknown> {
   endpoint: string;
@@ -210,21 +209,15 @@ export class AuthenticatedHttpService<TRequest = unknown, TResponse = unknown> i
     }
   }
 
+  @Log()
   private async performAuthentication() {
-    try {
-      const { data } = await this.withHttpRetry(() =>
-        this.httpService.post<TResponse, TRequest>(this.authConfig.endpoint, this.authConfig.requestBuilder()),
-      );
+    const { data } = await this.withHttpRetry(() =>
+      this.httpService.post<TResponse, TRequest>(this.authConfig.endpoint, this.authConfig.requestBuilder()),
+    );
 
-      const { token, expiry } = this.authConfig.responseExtractor(data);
-      this.token = token;
-      this.tokenExpiry = expiry;
-
-      this.logger.log('Authentication successful');
-    } catch (error) {
-      this.logger.error('Authentication failed', prettifyAxiosError(error));
-      throw error;
-    }
+    const { token, expiry } = this.authConfig.responseExtractor(data);
+    this.token = token;
+    this.tokenExpiry = expiry;
   }
 
   private async ensureAuthenticated() {
@@ -246,7 +239,7 @@ export class AuthenticatedHttpService<TRequest = unknown, TResponse = unknown> i
         const isRetryable = this.isRetryableError(error);
         this.logger.debug(
           `Request (${this.getFailedRequestInfo(error)}) attempt ${attemptNumber}/${retriesConsumed + retriesLeft + 1} failed (${isRetryable ? 'will retry' : 'non-retryable'})`,
-          prettifyAxiosError(error),
+          error?.toString() ?? 'unknown error',
         );
       },
     });
