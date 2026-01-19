@@ -4,6 +4,7 @@ import { type AxiosRequestConfig, type AxiosResponse, isAxiosError } from 'axios
 import { Log } from 'nestjs-log-decorator';
 import pRetry from 'p-retry';
 import { firstValueFrom, Observable } from 'rxjs';
+import { getRequestRoute } from '../axios';
 
 export interface AuthConfig<TRequest = unknown, TResponse = unknown> {
   endpoint: string;
@@ -238,7 +239,7 @@ export class AuthenticatedHttpService<TRequest = unknown, TResponse = unknown> i
       onFailedAttempt: ({ error, attemptNumber, retriesConsumed, retriesLeft }) => {
         const isRetryable = this.isRetryableError(error);
         this.logger.debug(
-          `Request (${this.getFailedRequestInfo(error)}) attempt ${attemptNumber}/${retriesConsumed + retriesLeft + 1} failed (${isRetryable ? 'will retry' : 'non-retryable'})`,
+          `Request (${getRequestRoute(error)}) attempt ${attemptNumber}/${retriesConsumed + retriesLeft + 1} failed (${isRetryable ? 'will retry' : 'non-retryable'})`,
           error?.toString() ?? 'unknown error',
         );
       },
@@ -250,7 +251,7 @@ export class AuthenticatedHttpService<TRequest = unknown, TResponse = unknown> i
       return await fn();
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 401) {
-        this.logger.debug(`Will retry (${this.getFailedRequestInfo(error)}) after re-authentication`);
+        this.logger.debug(`Will retry (${getRequestRoute(error)}) after re-authentication`);
         await this.authenticate();
         return await fn();
       }
@@ -272,16 +273,5 @@ export class AuthenticatedHttpService<TRequest = unknown, TResponse = unknown> i
     // 5xx server errors
     const status = error.response.status;
     return status >= 500 && status < 600;
-  }
-
-  private getFailedRequestInfo(error: unknown): string {
-    if (isAxiosError(error) && error.config) {
-      const { config } = error;
-      const method = config.method?.toUpperCase();
-      const url = config.url;
-      const queryString = config.params ? '?' + new URLSearchParams(config.params as Record<string, string>).toString() : '';
-      return `${method} ${url}${queryString}`;
-    }
-    return 'unknown';
   }
 }
