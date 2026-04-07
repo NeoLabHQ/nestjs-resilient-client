@@ -49,11 +49,17 @@ export const resiliencePolicyBuilder = <
     return wrap(...filteredPolicies) as unknown as A;
 }
 
+const isBackoffFactory = (value: unknown): value is IBackoffFactory<IRetryBackoffContext<unknown>> =>
+    typeof value === 'object' &&
+    value !== null &&
+    'next' in value &&
+    typeof (value as { next: unknown }).next === 'function';
+
 export const buildRetryPolicy = <T, S = void, R = unknown>(config: RetryConfig<T, S>): RetryPolicy => {
     const backoff: IBackoffFactory<IRetryBackoffContext<T>> = 
         typeof config.backoff === 'number' ? new ConstantBackoff(config.backoff)
         : config.backoff instanceof Array ? new IterableBackoff(config.backoff) 
-        : config.backoff instanceof Function ? new DelegateBackoff<IRetryBackoffContext<T>, S>(config.backoff) 
+        : isBackoffFactory(config.backoff) ? config.backoff  
         : new ExponentialBackoff(config.backoff)
 
     const policy = retry(

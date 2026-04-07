@@ -27,12 +27,8 @@ export interface RetryConfig<T, S = void> {
      * which is a good default for most applications. 
      * Takes in an options object, which can have any of these properties: */
     | Partial<IExponentialBackoffOptions<unknown>>
-    /**
-     * Backoff that delegates to a user-provided function. The function takes
-     * the backoff context, and can optionally take (and return) a state value
-     * that will be passed into subsequent backoff requests.
-     */
-    | DelegateBackoffFn<IRetryBackoffContext<T>, S>;
+    /** A cockatiel backoff factory (for example `new DelegateBackoff()`). */
+    | IBackoffFactory<IRetryBackoffContext<T>>;
 
     onSuccess?: (data: ISuccessEvent) => void;
     onFailure?: (data: IFailureEvent) => void;

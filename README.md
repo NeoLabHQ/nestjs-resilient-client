@@ -50,7 +50,7 @@ Conservative strategy is default, and rest of strategies are based on it.
 Default strategy that makes reasonable assumptions about API you are calling. For example it is probaly mainly follows REST, but makes common mistakes. Specific assumptions are:
 
 - Timeout is 5 seconds.
-- GET, HEAD, OPTIONS are idempotent and will be retried 3 times only for 5xx status codes, with exponential backoff.
+- GET, HEAD, OPTIONS are idempotent and will be retried 3 times only for 5xx status codes and network errors, with exponential backoff.
 - PUT, DELETE, PATCH, POST are not idempotent and will not be retried.
 
 ### Restfull
@@ -58,7 +58,7 @@ Default strategy that makes reasonable assumptions about API you are calling. Fo
 Assume that API you are calling is RESTfull and we can trust on methods and status codes.
 
 - Timeout is 2 seconds.
-- GET, HEAD, OPTIONS, PUT, DELETE are idempotent and will be retried 3 times only for 5xx status codes, with exponential backoff.
+- GET, HEAD, OPTIONS, PUT, DELETE are idempotent and will be retried 3 times only for 5xx status codes and network errors, with exponential backoff.
 - PATCH, POST are not idempotent and will not be retried, with exponential backoff.
 
 ### Low Quality
@@ -66,7 +66,7 @@ Assume that API you are calling is RESTfull and we can trust on methods and stat
 Assume that API you are calling is low quality, it need much time for processing and usually fails without obvious reason. Specific assumptions are:
 
 - Timeout is 30 second.
-- GET, HEAD, OPTIONS are idempotent and will be retried 3 times only for 5xx status codes, with exponential backoff.
+- GET, HEAD, OPTIONS are idempotent and will be retried 3 times only for 5xx status codes and network errors, with exponential backoff.
 - PUT, DELETE, PATCH, POST are not idempotent and will not be retried.
 
 ## Special Thanks
