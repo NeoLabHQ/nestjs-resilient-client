@@ -74,7 +74,8 @@ retry claude plugin install sdd@context-engineering-kit
 retry claude plugin install sadd@context-engineering-kit
 retry claude plugin install git@context-engineering-kit
 retry claude plugin install ddd@context-engineering-kit
-retry claude plugin install code-review@context-engineering-kit
+retry claude plugin install review@context-engineering-kit
+retry claude plugin install tech-stack@context-engineering-kit
 
 # Merge only autoUpdates / autoCompactEnabled so we never replace the whole file (preserves other keys).
 CLAUDE_JSON="/home/node/.claude.json"

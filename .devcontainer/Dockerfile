@@ -73,7 +73,8 @@ RUN (type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
     && sudo apt install gh -y
 
 # Install Golang
-RUN curl -fsSL https://go.dev/dl/go1.26.1.linux-amd64.tar.gz | tar -C /usr/local -xz
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://go.dev/dl/go1.26.1.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
 
 # Install Codemap
