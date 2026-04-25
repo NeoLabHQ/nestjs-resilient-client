@@ -16,7 +16,7 @@ export class HttpClient implements Loggable {
   constructor(private readonly httpService: HttpService, apiName: string, private readonly config: ResilanceConfig<number, void, number> = resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]) {
     this.logger = new Logger(`${apiName}:API`);
 
-    this.policy = resiliencePolicyBuilder(config);
+    this.policy = resiliencePolicyBuilder(this.config);
   }
 
   async request<T = any>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
