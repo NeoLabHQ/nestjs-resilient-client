@@ -1,7 +1,6 @@
 import type {
     CircuitState,
-    DelegateBackoffFn, 
-    FailureReason, 
+    FailureReason,
     IBackoffFactory, 
     ICountBreakerOptions, 
     IExponentialBackoffOptions, 

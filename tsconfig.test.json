@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    "types": ["node", "jest"],
+    "outDir": "./dist-test",
+    // `emitDecoratorMetadata` is unused by `base-decorators` (no Reflect
+    // metadata is read at runtime) but produces `__metadata("design:paramtypes",
+    // [String, typeof D !== "undefined" && D])` calls for every generic
+    // method parameter. Each of those `typeof D !== "undefined"` checks
+    // counts as an untakeable branch in Istanbul coverage — the generic `D`
+    // is erased at runtime so the truthy side is never hit. Disabling here
+    // keeps the production build's `emitDecoratorMetadata: true` intact while
+    // letting the unit tests score honest branch coverage.
+    "emitDecoratorMetadata": false
+  }
+}

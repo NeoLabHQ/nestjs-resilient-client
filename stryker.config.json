@@ -1,0 +1,17 @@
+{
+  "testRunner": "jest",
+  "jest": {
+    "configFile": "jest.config.ts"
+  },
+  "checkers": ["typescript"],
+  "tsconfigFile": "tsconfig.test.json",
+  "mutate": ["src/**/*.ts", "!src/**/__tests__/**"],
+  "ignoreStatic": true,
+  "thresholds": {
+    "high": 80,
+    "low": 70,
+    "break": 80
+  },
+  "reporters": ["html", "progress", "json"],
+  "tempDirName": "stryker-tmp"
+}

@@ -1,4 +1,4 @@
-import { DeduplicateInflight } from '@/cache/deduplicate-inflight.decorator'
+import { DeduplicateInflight } from '../deduplicate-inflight.decorator'
 
 describe('DeduplicateInflight decorator', () => {
   describe('promise coalescing', () => {

@@ -18,5 +18,12 @@
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests"],
+  "exclude": [
+    "src/**/__tests__/**",
+    "src/**/*.spec.ts",
+    "tests/**/*.spec.ts",
+    "jest.config.ts",
+    "jest.e2e.config.ts"
+  ]
 }

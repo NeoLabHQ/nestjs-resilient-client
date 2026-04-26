@@ -1,0 +1,378 @@
+import type { AxiosRequestConfig, AxiosResponse } from 'axios'
+
+import type { RestClient } from '../../client/rest.client'
+import type { AuthStrategyService } from '../auth-strategy.service'
+import { AuthRestClient } from '../auth-rest.client'
+
+/**
+ * Verb method names exposed by both {@link RestClient} and {@link AuthRestClient}.
+ * Used to drive table-style tests so that a missing `@Authenticate()` on any
+ * individual verb surfaces as a per-verb assertion failure rather than a
+ * silent gap in coverage.
+ */
+const ALL_VERBS = [
+  'request',
+  'get',
+  'delete',
+  'head',
+  'post',
+  'put',
+  'patch',
+  'postForm',
+  'putForm',
+  'patchForm',
+] as const
+type Verb = typeof ALL_VERBS[number]
+
+/** Verbs whose config argument lives at args[1] — `(url, config?)` shape. */
+const INDEX_1_VERBS: ReadonlySet<Verb> = new Set([
+  'get',
+  'delete',
+  'head',
+])
+
+/**
+ * Builds an axios-like error object that satisfies `isAxiosError(err)`.
+ *
+ * `axios.isAxiosError` checks the truthy `isAxiosError` flag on the error
+ * value, so any plain `Error` augmented with that flag and a `response`
+ * member behaves identically to a real `AxiosError` for the decorator's
+ * 401 / non-401 branching logic.
+ */
+function makeAxiosError(status: number): Error {
+  const error = new Error(`Request failed with status code ${status}`) as Error & {
+    isAxiosError: boolean
+    response: { status: number }
+  }
+  error.isAxiosError = true
+  error.response = { status }
+  return error
+}
+
+/** Per-verb jest.fn map covering every method on {@link RestClient}. */
+type RestClientStub = {
+  [K in Verb]: jest.Mock<Promise<AxiosResponse>, unknown[]>
+}
+
+/** Builds a fresh {@link RestClient} stub where every verb resolves to the same response. */
+function createRestClientStub(response: AxiosResponse = { data: 'ok' } as AxiosResponse): RestClientStub {
+  const stub = {} as RestClientStub
+  for (const verb of ALL_VERBS) {
+    stub[verb] = jest.fn().mockResolvedValue(response)
+  }
+  return stub
+}
+
+/** Lightweight typed stub for the auth strategy surface read by `@Authenticate`. */
+interface AuthStrategyStub {
+  authenticateIfNeeded: jest.Mock<Promise<void>, []>
+  extendRequest: jest.Mock<AxiosRequestConfig, [AxiosRequestConfig]>
+  clearAuth: jest.Mock<void, []>
+}
+
+/**
+ * Builds a fresh strategy stub whose {@link AuthStrategyStub.extendRequest}
+ * merges an `Authorization: Bearer X` header into any incoming config.
+ */
+function createAuthStrategyStub(): AuthStrategyStub {
+  return {
+    authenticateIfNeeded: jest.fn().mockResolvedValue(undefined),
+    extendRequest: jest.fn(
+      (config: AxiosRequestConfig): AxiosRequestConfig => ({
+        ...config,
+        headers: {
+          ...((config.headers as Record<string, unknown> | undefined) ?? {}),
+          Authorization: 'Bearer X',
+        },
+      }),
+    ),
+    clearAuth: jest.fn(),
+  }
+}
+
+/**
+ * Constructs an {@link AuthRestClient} bound to fresh stubs and returns the
+ * client together with handles to those stubs for assertions.
+ */
+function buildSut(): {
+  client: AuthRestClient
+  restClient: RestClientStub
+  authStrategy: AuthStrategyStub
+} {
+  const restClient = createRestClientStub()
+  const authStrategy = createAuthStrategyStub()
+  const client = new AuthRestClient(
+    restClient as unknown as RestClient,
+    authStrategy as unknown as AuthStrategyService,
+  )
+  return { client, restClient, authStrategy }
+}
+
+describe('AuthRestClient', () => {
+  describe('constructor and field visibility', () => {
+    it('exposes authStrategy as a public-readable field', () => {
+      const { client, authStrategy } = buildSut()
+
+      // The `@Authenticate` decorator reads `context.target.authStrategy` at
+      // call time, so the field MUST be public-readable on the instance.
+      expect(client.authStrategy).toBe(authStrategy)
+    })
+  })
+
+  describe('verb forwarding', () => {
+    it.each(ALL_VERBS)('forwards %s to the underlying RestClient exactly once', async (verb) => {
+      const { client, restClient } = buildSut()
+
+      // Each verb is invoked with a config argument at the appropriate index
+      // so that `@Authenticate`'s config-arg lookup succeeds. Verbs at
+      // index 1 use `(url, config)`; verbs at index 2 use `(url, data, config)`;
+      // `request` uses `(config)` and is index-1 per the decorator.
+      if (verb === 'request') {
+        await (client[verb] as (config: AxiosRequestConfig) => Promise<AxiosResponse>)({ url: '/r' })
+      }
+      else if (INDEX_1_VERBS.has(verb)) {
+        await (client[verb] as (url: string, config?: AxiosRequestConfig) => Promise<AxiosResponse>)('/x')
+      }
+      else {
+        await (
+          client[verb] as (url: string, data: unknown, config?: AxiosRequestConfig) => Promise<AxiosResponse>
+        )('/x', { payload: 1 })
+      }
+
+      expect(restClient[verb]).toHaveBeenCalledTimes(1)
+      // No other verb method on the underlying RestClient should have fired.
+      for (const other of ALL_VERBS) {
+        if (other === verb) continue
+        expect(restClient[other]).not.toHaveBeenCalled()
+      }
+    })
+
+    it.each(ALL_VERBS)('@Authenticate decorates %s — pre-flight authenticateIfNeeded runs before forwarding', async (verb) => {
+      const { client, restClient, authStrategy } = buildSut()
+
+      const callOrder: string[] = []
+      authStrategy.authenticateIfNeeded.mockImplementation(async () => {
+        callOrder.push('authenticateIfNeeded')
+      })
+      restClient[verb].mockImplementation(async () => {
+        callOrder.push('forward')
+        return { data: 'ok' } as AxiosResponse
+      })
+
+      if (verb === 'request') {
+        await (client[verb] as (config: AxiosRequestConfig) => Promise<AxiosResponse>)({ url: '/r' })
+      }
+      else if (INDEX_1_VERBS.has(verb)) {
+        await (client[verb] as (url: string, config?: AxiosRequestConfig) => Promise<AxiosResponse>)('/x')
+      }
+      else {
+        await (
+          client[verb] as (url: string, data: unknown, config?: AxiosRequestConfig) => Promise<AxiosResponse>
+        )('/x', { payload: 1 })
+      }
+
+      // Decoration is verified by observing the pre-flight authenticateIfNeeded
+      // hook firing strictly before the underlying RestClient call.
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
+      expect(callOrder).toEqual(['authenticateIfNeeded', 'forward'])
+    })
+  })
+
+  describe('header merge after extendRequest', () => {
+    it('merges Authorization: Bearer X with original headers on get(/x, { headers: { y: \'z\' } })', async () => {
+      const { client, restClient, authStrategy } = buildSut()
+
+      await client.get('/x', { headers: { y: 'z' } })
+
+      // The decorator passes the original config through extendRequest…
+      expect(authStrategy.extendRequest).toHaveBeenCalledTimes(1)
+      expect(authStrategy.extendRequest).toHaveBeenCalledWith({ headers: { y: 'z' } })
+
+      // …and the underlying RestClient receives the merged result, with both
+      // the original `y: 'z'` header and the strategy's Authorization header.
+      expect(restClient.get).toHaveBeenCalledTimes(1)
+      expect(restClient.get).toHaveBeenCalledWith('/x', {
+        headers: { y: 'z', Authorization: 'Bearer X' },
+      })
+    })
+  })
+
+  describe('401 first, success second', () => {
+    it('triggers exactly two underlying RestClient calls and invokes authenticateIfNeeded twice', async () => {
+      const { client, restClient, authStrategy } = buildSut()
+
+      // First call rejects with a 401; second call resolves successfully.
+      // The `@Authenticate` decorator's contract is: catch 401, clearAuth,
+      // re-authenticate, and retry the underlying method exactly once.
+      restClient.get
+        .mockRejectedValueOnce(makeAxiosError(401))
+        .mockResolvedValueOnce({ data: 'ok' } as AxiosResponse)
+
+      const response = await client.get('/x')
+
+      expect(response.data).toBe('ok')
+      expect(restClient.get).toHaveBeenCalledTimes(2)
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(2)
+      expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('500 error path', () => {
+    it('rethrows the 500 and invokes authenticateIfNeeded exactly once (pre-flight only)', async () => {
+      const { client, restClient, authStrategy } = buildSut()
+
+      // 500 is non-401, so the decorator must NOT retry and must NOT clearAuth.
+      restClient.get.mockRejectedValueOnce(makeAxiosError(500))
+
+      await expect(client.get('/x')).rejects.toMatchObject({
+        isAxiosError: true,
+        response: { status: 500 },
+      })
+
+      expect(restClient.get).toHaveBeenCalledTimes(1)
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
+      expect(authStrategy.clearAuth).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('per-verb argument forwarding with explicit config', () => {
+    // Each verb is exercised with both shapes of its public surface — with
+    // and without the optional `config` argument — so the optional-arg
+    // branches in the verb wrappers' transpiled output are exercised.
+
+    it.each(['get', 'delete', 'head'] as const)(
+      '%s forwards (url, config) to the underlying RestClient with merged Authorization header',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+
+        const config: AxiosRequestConfig = { headers: { 'x-trace': 't' } }
+        await client[verb]('/path', config)
+
+        expect(restClient[verb]).toHaveBeenCalledTimes(1)
+        expect(restClient[verb]).toHaveBeenCalledWith('/path', {
+          headers: { 'x-trace': 't', Authorization: 'Bearer X' },
+        })
+        // The strategy must observe the original (un-augmented) config so that
+        // re-authentication after a 401 starts from the caller-supplied state.
+        expect(authStrategy.extendRequest).toHaveBeenCalledWith({ headers: { 'x-trace': 't' } })
+      },
+    )
+
+    it.each(['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm'] as const)(
+      '%s forwards (url, data, config) to the underlying RestClient with merged Authorization header',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+
+        const data = { id: 42 }
+        const config: AxiosRequestConfig = { headers: { 'x-trace': 't' } }
+        await client[verb]('/path', data, config)
+
+        expect(restClient[verb]).toHaveBeenCalledTimes(1)
+        expect(restClient[verb]).toHaveBeenCalledWith('/path', data, {
+          headers: { 'x-trace': 't', Authorization: 'Bearer X' },
+        })
+        expect(authStrategy.extendRequest).toHaveBeenCalledWith({ headers: { 'x-trace': 't' } })
+      },
+    )
+
+    it.each(['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm'] as const)(
+      '%s defaults the omitted config to {} and still merges Authorization',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+
+        // Omitting the `config` arg forces the decorator's `args[idx] ?? {}`
+        // fallback to fire — covers the optional-config branch on data verbs.
+        await (
+          client[verb] as (url: string, data: unknown) => Promise<AxiosResponse>
+        )('/path', { id: 1 })
+
+        expect(authStrategy.extendRequest).toHaveBeenCalledWith({})
+        expect(restClient[verb]).toHaveBeenCalledWith('/path', { id: 1 }, {
+          headers: { Authorization: 'Bearer X' },
+        })
+      },
+    )
+
+    it.each(['get', 'delete', 'head'] as const)(
+      '%s defaults the omitted config to {} and still merges Authorization',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+
+        // Omit `config` for the (url, config?) verbs — exercises the optional
+        // arg branch on the index-1 verb shape.
+        await client[verb]('/path')
+
+        expect(authStrategy.extendRequest).toHaveBeenCalledWith({})
+        expect(restClient[verb]).toHaveBeenCalledWith('/path', {
+          headers: { Authorization: 'Bearer X' },
+        })
+      },
+    )
+
+    it('request forwards (config) to the underlying RestClient', async () => {
+      const { client, restClient, authStrategy } = buildSut()
+
+      await client.request({ url: '/raw', method: 'GET' })
+
+      expect(restClient.request).toHaveBeenCalledTimes(1)
+      // The `request` verb's config sits at args[0] on the public surface but
+      // the decorator's `configArgIndex('request') === 1` writes the extended
+      // config into args[1]. The forwarded args[0] is the caller's original
+      // config object, untouched.
+      expect(restClient.request.mock.calls[0]![0]).toEqual({ url: '/raw', method: 'GET' })
+      // Pre-flight authenticate ran exactly once.
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('per-verb 401 retry semantics', () => {
+    // Mutation testing flips the 401 status check across every verb. Running
+    // the 401 retry path through every verb makes those mutants observable.
+    type IndexOneVerb = 'get' | 'delete' | 'head'
+    type IndexTwoVerb = 'post' | 'put' | 'patch' | 'postForm' | 'putForm' | 'patchForm'
+    const INDEX_ONE_VERBS: IndexOneVerb[] = ['get', 'delete', 'head']
+    const INDEX_TWO_VERBS: IndexTwoVerb[] = ['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm']
+
+    it.each(INDEX_ONE_VERBS)(
+      '%s recovers from a single 401 by retrying once and clearing auth',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+        restClient[verb]
+          .mockRejectedValueOnce(makeAxiosError(401))
+          .mockResolvedValueOnce({ data: 'recovered' } as AxiosResponse)
+
+        const response = await client[verb]('/x')
+        expect(response.data).toBe('recovered')
+        expect(restClient[verb]).toHaveBeenCalledTimes(2)
+        expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    it.each(INDEX_TWO_VERBS)(
+      '%s recovers from a single 401 by retrying once and clearing auth',
+      async (verb) => {
+        const { client, restClient, authStrategy } = buildSut()
+        restClient[verb]
+          .mockRejectedValueOnce(makeAxiosError(401))
+          .mockResolvedValueOnce({ data: 'recovered' } as AxiosResponse)
+
+        const response = await client[verb]('/x', { id: 1 })
+        expect(response.data).toBe('recovered')
+        expect(restClient[verb]).toHaveBeenCalledTimes(2)
+        expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    it('request recovers from a single 401 by retrying once', async () => {
+      const { client, restClient, authStrategy } = buildSut()
+      restClient.request
+        .mockRejectedValueOnce(makeAxiosError(401))
+        .mockResolvedValueOnce({ data: 'recovered' } as AxiosResponse)
+
+      const response = await client.request({ url: '/raw' })
+      expect(response.data).toBe('recovered')
+      expect(restClient.request).toHaveBeenCalledTimes(2)
+      expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+    })
+  })
+})

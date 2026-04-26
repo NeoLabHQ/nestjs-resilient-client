@@ -1,5 +1,13 @@
 import { Wrap } from 'base-decorators'
-import { KeyBuilder } from './cache.decorator'
+
+/**
+ * Local type alias for a function that derives a deduplication key from method arguments.
+ *
+ * Defined here (rather than imported from a shared `cache.decorator` module) because
+ * `DeduplicateInflight` is the only consumer in the current codebase and the previously
+ * referenced `./cache.decorator` module does not exist.
+ */
+type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string
 
 /** Unique exclusion key for DeduplicateInflight decorators, preventing double-wrap detection conflicts with other Wrap-based decorators. */
 const INFLIGHT_EXCLUSION_KEY: unique symbol = Symbol('inflight')

@@ -21,7 +21,7 @@ export function isRetryableError(error: Error, methods: string[] = SAFE_HTTP_MET
     }
 
     // Retry only for idempotent methods
-    if (isMethodInList(error, methods)) {
+    if (!isMethodInList(error, methods)) {
         return false;
     }
 
@@ -30,12 +30,13 @@ export function isRetryableError(error: Error, methods: string[] = SAFE_HTTP_MET
 }
 
 export function isMethodInList(error: AxiosError, list: string[]): boolean {
-    if (!error.config?.method) {
+    const method = error.config?.method;
+    if (!method) {
         // Cannot determine if the request can be retried
         return false;
     }
 
-    return list.includes(error.config?.method?.toUpperCase() ?? '');
+    return list.includes(method.toUpperCase());
 }
 
 export function isNetworkOrInternalError(error: AxiosError): boolean {
