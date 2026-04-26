@@ -37,6 +37,7 @@ This project is in initial draft state, it not working, but contain initial arch
 - Add command to run `test:unit` with coverage, `test:e2e`, `test:mutation` to the package.json scripts. And `test` command to run all of them, one by one.
 - Update contributing guide with new commands and how to run them.
 - Rename build.yaml to verify.yaml and correct if need.
+- Update readme with quick start, usage examples and API reference.
 
 
 ## Description
