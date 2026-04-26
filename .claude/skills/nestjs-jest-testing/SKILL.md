@@ -7,7 +7,7 @@ description: Complete guide for setting up Jest unit tests, e2e tests, Stryker m
 
 ## Overview
 
-This skill covers the full test setup for NestJS TypeScript projects using Jest + ts-jest, with separate configs for unit and e2e tests, Stryker for mutation coverage (80% break threshold), jest-it-up for auto-bumping coverage thresholds, tsx-based smoke tests, and a reusable GitHub Actions verify workflow.
+This skill covers the full test setup for NestJS TypeScript projects using Jest + ts-jest, with separate configs for unit and e2e tests, Stryker for mutation coverage (80% break threshold), jest-it-up for auto-bumping coverage thresholds.
 
 ---
 
@@ -18,8 +18,6 @@ This skill covers the full test setup for NestJS TypeScript projects using Jest 
 - **E2e tests**: Boot the full NestJS module with `Test.createTestingModule({ imports: [AppModule] })` + supertest
 - **Stryker**: Runs Jest on mutated code; `break: 80` exits with code 1 if mutation score drops below 80%
 - **jest-it-up**: Reads `coverage/coverage-summary.json` after tests and bumps jest.config thresholds upward
-- **Smoke tests**: `npx tsx smoke-tests/smoke-test.ts` — runs against a live service URL from `SERVICE_URL` env var
-- **Reusable workflow**: `on: workflow_call:` allows verify.yml to be called from other workflows
 
 ---
 
@@ -34,8 +32,6 @@ This skill covers the full test setup for NestJS TypeScript projects using Jest 
 | Stryker Jest Runner | Jest-specific config options | https://stryker-mutator.io/docs/stryker-js/jest-runner/ |
 | Stryker TypeScript Checker | Type-safe mutation filtering | https://stryker-mutator.io/docs/stryker-js/typescript-checker/ |
 | jest-it-up | Auto-bumping coverage thresholds | https://github.com/rbardini/jest-it-up |
-| tsx | Fast TypeScript executor for scripts | https://tsx.is/ |
-| GitHub Reusable Workflows | workflow_call trigger and usage | https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows |
 
 ---
 
@@ -53,7 +49,6 @@ This skill covers the full test setup for NestJS TypeScript projects using Jest 
 | `@stryker-mutator/core` | Mutation testing engine | Stable (v8) | Core package |
 | `@stryker-mutator/jest-runner` | Jest integration for Stryker | Stable (v8) | Matches project's jest setup |
 | `@stryker-mutator/typescript-checker` | Type-safe mutation filtering | Stable (v8) | Filters type-invalid mutants before test run |
-| `tsx` | TypeScript script executor | Stable (v4) | Used via npx for smoke tests |
 
 ### Recommended Stack
 
@@ -137,40 +132,6 @@ describe('AppController (e2e)', () => {
 })
 ```
 
-### Pattern 3: Smoke Test with tsx
-
-**When to use**: Verifying a live deployed service responds correctly to health checks.
-
-```typescript
-// smoke-tests/smoke-test.ts
-const SERVICE_URL = process.env.SERVICE_URL
-if (!SERVICE_URL) {
-  console.error('SERVICE_URL environment variable is required')
-  process.exit(1)
-}
-
-const checkEndpoint = async (path: string, expectedStatus = 200) => {
-  const response = await fetch(`${SERVICE_URL}${path}`)
-  if (response.status !== expectedStatus) {
-    throw new Error(`${path} returned ${response.status}, expected ${expectedStatus}`)
-  }
-  console.log(`✓ ${path} - ${response.status}`)
-}
-
-const runSmokeTests = async () => {
-  try {
-    await checkEndpoint('/health')
-    await checkEndpoint('/health/liveness')
-    await checkEndpoint('/health/readiness')
-    console.log('All smoke tests passed')
-  } catch (error) {
-    console.error('Smoke test failed:', error)
-    process.exit(1)
-  }
-}
-
-runSmokeTests()
-```
 
 ### Pattern 4: Separate Jest Configs (Unit vs E2e)
 
@@ -216,21 +177,6 @@ const config: Config = {
 }
 
 export default config
-```
-
-### Pattern 5: E2e Environment Setup File
-
-**When to use**: Required when using @itgorillaz/configify — env vars must be set before module bootstrap.
-
-Allways use `=` instead of `??=` to set env vars in the setup file. Test file should be predictable and not depend on the presence of a local `.env` file.
-
-```typescript
-// tests/e2e-env-setup.ts
-// Set required env vars before NestJS module bootstraps.
-// Use = so real values from .env or CI are always overwritten.
-process.env.PGMQ_POSTGRES_URL = 'postgresql://test:test@localhost:5432/test'
-process.env.CONSENT_SERVICE_GRAPHQL_URL = 'http://localhost:8080/v1/graphql'
-process.env.PORT = '3001'
 ```
 
 ---
@@ -281,102 +227,6 @@ process.env.PORT = '3001'
 
 Note: `jest-it-up` runs as `posttest:unit` (not `posttest`) to avoid running after e2e/smoke.
 
----
-
-## GitHub Actions: Reusable Workflow Pattern
-
-```yaml
-# .github/workflows/verify-reusable.yml
-name: Verify (Reusable)
-
-on:
-  workflow_call:
-
-jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run codegen
-        env:
-          CONSENT_SERVICE_GRAPHQL_URL: ${{ vars.CONSENT_SERVICE_GRAPHQL_URL }}
-      - run: npm run build
-      - run: npm run lint
-      - run: npm run test:unit
-      - run: npm run test:e2e
-```
-
-```yaml
-# .github/workflows/verify.yml (calls reusable)
-name: Verify
-
-on:
-  pull_request:
-    branches: [master]
-    types: [opened, synchronize]
-
-jobs:
-  verify:
-    uses: ./.github/workflows/verify-reusable.yml
-```
-
-```yaml
-# .github/workflows/deploy-dev.yml (with verify gate)
-jobs:
-  verify:
-    uses: ./.github/workflows/verify-reusable.yml
-    secrets: inherit
-
-  deploy:
-    needs: [verify]
-    runs-on: ubuntu-latest
-    # ... deploy steps
-```
-
----
-
-## Common Pitfalls & Solutions
-
-| Issue | Impact | Solution |
-|-------|--------|----------|
-| configify validates env vars before `overrideProvider()` in e2e tests | High | Set `process.env.VAR ??= 'value'` in `setupFiles` (see configify skill) |
-| `pg.Pool` created inside constructor blocks unit testing | High | Refactor: inject `Pool` via constructor, or add `pool` parameter with default |
-| `GraphQLClient` created inside constructor blocks unit testing | High | Refactor: inject `GraphQLClient` via constructor parameter |
-| `jest-it-up` not updating thresholds | Medium | Ensure `json-summary` is in `coverageReporters` and `collectCoverage: true` |
-| Stryker extremely slow | Medium | Use `coverageAnalysis: "perTest"` and add `--concurrency` option |
-| E2e tests time out with default 5s | Medium | Set `testTimeout: 30000` in jest.e2e.config.ts |
-| Smoke test fails silently | Medium | Always exit with `process.exit(1)` in catch block |
-| `run-smoke-tests-local.sh` leaves service running | Low | Use `trap 'kill $PID' EXIT` to clean up |
-
----
-
-## Smoke Test Local Runner Pattern
-
-```bash
-#!/bin/bash
-# smoke-tests/run-smoke-tests-local.sh
-set -e
-
-echo "Starting service..."
-npm run start &
-SERVICE_PID=$!
-trap 'kill $SERVICE_PID 2>/dev/null' EXIT
-
-echo "Waiting for service to be ready..."
-until curl -sf http://localhost:3000/health/liveness > /dev/null 2>&1; do
-  sleep 1
-done
-
-echo "Running smoke tests..."
-SERVICE_URL=http://localhost:3000 npx tsx smoke-tests/smoke-test.ts
-```
-
----
 
 ## Similar Implementations
 
@@ -402,8 +252,6 @@ SERVICE_URL=http://localhost:3000 npx tsx smoke-tests/smoke-test.ts
 | https://stryker-mutator.io/docs/stryker-js/configuration/ | Official | 2026-04-23 |
 | https://stryker-mutator.io/docs/stryker-js/jest-runner/ | Official | 2026-04-23 |
 | https://github.com/rbardini/jest-it-up | Official | 2026-04-23 |
-| https://tsx.is/ | Official | 2026-04-23 |
-| https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows | Official | 2026-04-23 |
 
 ---
 

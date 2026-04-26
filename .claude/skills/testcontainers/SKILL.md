@@ -40,7 +40,6 @@ description: Guide for using testcontainers DockerComposeEnvironment to manage i
 | Name | Purpose | Maturity | Notes |
 |------|---------|----------|-------|
 | `testcontainers` | Core container management | Stable (11.13.0) | Includes DockerComposeEnvironment |
-| `@testcontainers/minio` | Minio-specific module | Check availability | Alternative to generic DockerCompose |
 
 ### Recommended Stack
 
@@ -215,18 +214,6 @@ module.exports = {
 }
 ```
 
-### e2e-env-setup.ts Update
-
-Add S3 environment variables with test defaults (overridden by globalSetup when containers are running):
-
-```typescript
-// test/e2e-env-setup.ts (additions)
-process.env.S3_ENDPOINT ??= 'http://localhost:9000'
-process.env.S3_ACCESS_KEY_ID ??= 'minioadmin'
-process.env.S3_SECRET_ACCESS_KEY ??= 'minioadmin'
-process.env.S3_BUCKET ??= 'analytics-data'
-process.env.S3_REGION ??= 'us-east-1'
-```
 
 ### Integration Points
 
