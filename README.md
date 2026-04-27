@@ -78,7 +78,7 @@ export class CatalogService {
 }
 ```
 
-// TODO: add example where base domain is set in httpService, and then used in client.
+// TODO: add example where base domain is set using axios.create({ baseURL: ... }) at provider level.
 // TODO: add example where reslience config is set from RESTFUL preset. And example where config build from scratch.
 
 ### Authenticated client — Bearer token
