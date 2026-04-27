@@ -154,9 +154,9 @@ function extendConfigAtIndex(
  */
 function Authenticate(): MethodDecorator {
   return Wrap<AuthenticateHost, unknown[], Promise<unknown>>(
-    (method, context) => async (...args: unknown[]): Promise<unknown> => {
-      const idx = configArgIndex(context.propertyKey)
-      const strategy = context.target.authStrategy
+    (method, {propertyKey, target}) => async (...args: unknown[]): Promise<unknown> => {
+      const idx = configArgIndex(propertyKey) // TODO: this logic is too fragile and overcomplicated. Add extractConfig(...args): AxiosRequestConfig  function as param of this decorator, and set it per menthod instead of this hardcoded logic.
+      const strategy = target.authStrategy
 
       await strategy.authenticateIfNeeded()
       const firstAttemptArgs = extendConfigAtIndex(args, idx, strategy)

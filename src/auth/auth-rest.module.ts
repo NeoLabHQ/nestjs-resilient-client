@@ -140,8 +140,7 @@ export class AuthRestModule {
           useFactory: (opts: AuthRestModuleOptions): RestClient =>
             new RestClient(
               opts.httpService,
-              opts.resilanceConfig
-                ?? resiliencePolicyPresets[ResilencePresets.CONSERVATIVE],
+              opts.resilanceConfig,
             ),
           inject: [AUTH_MODULE_OPTIONS],
         },

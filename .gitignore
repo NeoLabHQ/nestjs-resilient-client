@@ -142,3 +142,5 @@ dist
 *.log
 .DS_Store
 .specs/scratchpad/
+
+/reports/

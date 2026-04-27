@@ -12,7 +12,10 @@ Zero-configuration resilience and transient-fault-handling HTTP client that wrap
 
 ### Resilience Patterns
 
-The default configuration ("Conservative") assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. Other presets ("RESTFULL", "LOW_QUALITY") trade off retry aggressiveness against the trust you place in the upstream API.
+
+The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example Timeout policy. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
+
+Other presets "RESTFULL" and "LOW_QUALITY" trade off retry aggressiveness against the trust you place in the upstream API.
 
 #### Reactive Resilience Patterns
 
@@ -49,7 +52,7 @@ import {
     {
       provide: RestClient,
       useFactory: (http: HttpService) =>
-        new RestClient(http, resiliencePolicyPresets[ResilencePresets.RESTFULL]),
+        new RestClient(http),
       inject: [HttpService],
     },
   ],
@@ -75,6 +78,9 @@ export class CatalogService {
 }
 ```
 
+// TODO: add example where base domain is set in httpService, and then used in client.
+// TODO: add example where reslience config is set from RESTFUL preset. And example where config build from scratch.
+
 ### Authenticated client — Bearer token
 
 `AuthRestModule.forRootAsync` accepts a factory that returns the runtime collaborators (`httpService`, `authConfig`, optional `resilanceConfig`). The `authConfig.authenticate(client)` callback receives a fully resilient `RestClient` and must resolve to an `AuthStrategy`.
@@ -93,6 +99,7 @@ import { AuthRestModule, type AuthStrategy } from 'nestjs-http-client'
       useFactory: (httpService: HttpService) => ({
         httpService,
         authConfig: {
+          // TODO: example is incorrect, it should recive RestClient, instead of HttpService. Add test for this case, fix it if it not works.
           authenticate: async (client): Promise<AuthStrategy> => {
             const tokenResponse = await client.post<{ access_token: string, expires_in: number }>(
               'https://auth.example.com/oauth/token',
@@ -176,6 +183,7 @@ The `CONSERVATIVE` preset is the default. Switch presets by passing
 
 Reasonable assumptions about an API that mostly follows REST but makes common mistakes.
 
+- Timeout is 60 seconds.
 - `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
 - `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
@@ -184,6 +192,7 @@ Reasonable assumptions about an API that mostly follows REST but makes common mi
 
 Trust the upstream API to honour REST idempotency on `PUT` and `DELETE`.
 
+- Timeout is 10 seconds.
 - `GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE` are retried up to 3 times on 5xx and network errors with exponential backoff.
 - `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
@@ -192,6 +201,7 @@ Trust the upstream API to honour REST idempotency on `PUT` and `DELETE`.
 
 Same retry surface as `CONSERVATIVE`; named separately so consumers can extend it with longer timeouts at the axios layer.
 
+- Timeout is 180 seconds (3 minutes).
 - `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
 - `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
@@ -200,10 +210,9 @@ Same retry surface as `CONSERVATIVE`; named separately so consumers can extend i
 
 ## Behaviour notes
 
-- **401 retry** — `AuthRestClient` retries exactly once after a 401: drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then re-invokes the wrapped `RestClient` method. Non-401 errors are rethrown without touching the cached strategy.
-- **Concurrent authentication** — `AuthStrategyService.performAuthenticate` is decorated with `@DeduplicateInflight`, so any number of concurrent `authenticateIfNeeded()` callers collapse into a single underlying `authConfig.authenticate(client)` invocation.
-- **Default preset fallback** — `AuthRestModule.forRootAsync` applies `CONSERVATIVE` inside the `RestClient` provider factory when `resilanceConfig` is omitted (or explicitly `undefined`).
-- **Cancellation** — the cockatiel `signal` is forwarded into axios on the generic `request()` path. The per-method helpers (`get`, `post`, ...) currently do not forward the signal.
+- **401 retry** — `AuthRestClient` retries (amount depends on resilience configuration) after a 401: drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then re-invokes the wrapped `RestClient` method. Non-401 errors are rethrown without touching the cached strategy.
+- **Concurrent authentication** — any number of concurrent authentication attempts result in single real request to authentication service.
+- **Cancellation** — the cockatiel `signal` is forwarded into axios on the generic `request()` path. The per-method helpers (`get`, `post`, ...) currently do not forward the signal. // TODO: make them forward the signal.
 
 ## API Reference
 
@@ -303,6 +312,8 @@ interface ResilanceConfig<T, S = void, R = unknown> {
 ```
 
 Sub-types `RetryConfig`, `CircuitBreakerConfig`, `BulkheadConfig`, and `FallbackConfig` are exported as type-only aliases; see `src/client/resilance.config.ts` for the full field-level documentation.
+
+// TODO: add examples building resilience configs from scratch.
 
 #### `ResilencePresets`
 
