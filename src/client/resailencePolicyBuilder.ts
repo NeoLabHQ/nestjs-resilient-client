@@ -1,4 +1,4 @@
-import type { RetryConfig, ResilanceConfig, CircuitBreakerConfig, BulkheadConfig, FallbackConfig } from "./resilance.config";
+import type { RetryConfig, ResilanceConfig, CircuitBreakerConfig, BulkheadConfig, FallbackConfig, TimeoutConfig } from "./resilance.config";
 import {
     type IPolicy,
     type IDefaultPolicyContext,
@@ -19,6 +19,9 @@ import {
     NoopPolicy,
     bulkhead,
     fallback,
+    timeout,
+    TimeoutPolicy,
+    TimeoutStrategy,
     CircuitBreakerPolicy,
     BulkheadPolicy,
     FallbackPolicy,
@@ -27,20 +30,29 @@ import {
 } from "cockatiel";
 
 export const resiliencePolicyBuilder = <
-    T, 
-    S = void, 
-    R = unknown, 
+    T,
+    S = void,
+    R = unknown,
     A extends IPolicy<IDefaultPolicyContext, R> = IPolicy<IDefaultPolicyContext, R>
 >(config: ResilanceConfig<T, S, R>): A => {
     const policies: Array<IPolicy<IDefaultPolicyContext, R> | undefined> = [
         config.retry && buildRetryPolicy(config.retry),
+        // Order matters: cockatiel's `wrap(outer, ..., inner)` makes the FIRST
+        // argument the outermost policy. Retry sits OUTSIDE timeout so each
+        // attempt receives its own independent deadline — a slow attempt is
+        // cancelled by the inner timeout, then retry can issue a fresh attempt
+        // with a new timeout window. Placing timeout outermost would let the
+        // first slow attempt consume the full budget and starve the retries.
+        config.timeout !== undefined
+            ? buildTimeoutPolicy(config.timeout)
+            : undefined,
         config.circuitBreaker && buildCircuitBreakerPolicy(config.circuitBreaker),
         config.bulkhead && buildBulkheadPolicy(config.bulkhead),
         config.fallback && buildFallbackPolicy(config.fallback),
     ];
 
     const filteredPolicies = policies.filter(Boolean) as Array<IPolicy<IDefaultPolicyContext, R>>;
-    
+
     if (filteredPolicies.length === 0) {
         return new NoopPolicy() as unknown as A;
     }
@@ -138,6 +150,31 @@ export const buildBulkheadPolicy = (config: BulkheadConfig): BulkheadPolicy => {
     }
     if (config.onReject) {
         policy.onReject(config.onReject);
+    }
+
+    return policy;
+}
+
+export const buildTimeoutPolicy = (config: number | TimeoutConfig): TimeoutPolicy => {
+    // Bare-number form is sugar for "cooperative timeout of N milliseconds".
+    // Cooperative is the safe default because axios honours the AbortSignal
+    // forwarded by `@ExecuteWithPolicy`, so the in-flight request short-
+    // circuits cleanly without leaving a dangling promise.
+    const normalised: TimeoutConfig = typeof config === 'number'
+        ? { duration: config }
+        : config;
+
+    const strategy = normalised.strategy ?? TimeoutStrategy.Cooperative;
+    const policy = timeout(normalised.duration, strategy);
+
+    if (normalised.onSuccess) {
+        policy.onSuccess(normalised.onSuccess);
+    }
+    if (normalised.onFailure) {
+        policy.onFailure(normalised.onFailure);
+    }
+    if (normalised.onTimeout) {
+        policy.onTimeout(normalised.onTimeout);
     }
 
     return policy;

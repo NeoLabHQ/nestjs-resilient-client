@@ -4,6 +4,7 @@ import {
   buildCircuitBreakerPolicy,
   buildBulkheadPolicy,
   buildFallbackPolicy,
+  buildTimeoutPolicy,
 } from '../resailencePolicyBuilder'
 import {
   NoopPolicy,
@@ -11,12 +12,15 @@ import {
   CircuitBreakerPolicy,
   BulkheadPolicy,
   FallbackPolicy,
+  TimeoutPolicy,
+  TimeoutStrategy,
   ConstantBackoff,
   IterableBackoff,
   ExponentialBackoff,
   ConsecutiveBreaker,
   CountBreaker,
   SamplingBreaker,
+  TaskCancelledError,
 } from 'cockatiel'
 import type { IBackoff, IBackoffFactory } from 'cockatiel'
 
@@ -90,10 +94,28 @@ describe('resiliencePolicyBuilder', () => {
       expect(wrapped).toHaveLength(1)
       expect(wrapped[0]).toBeInstanceOf(FallbackPolicy)
     })
+
+    it('wraps a single TimeoutPolicy when only timeout is configured (number form)', () => {
+      const policy = resiliencePolicyBuilder({ timeout: 1_000 })
+
+      const wrapped = getWrappedPolicies(policy)
+      expect(wrapped).toHaveLength(1)
+      expect(wrapped[0]).toBeInstanceOf(TimeoutPolicy)
+    })
+
+    it('wraps a single TimeoutPolicy when only timeout is configured (object form)', () => {
+      const policy = resiliencePolicyBuilder({
+        timeout: { duration: 1_000, strategy: TimeoutStrategy.Aggressive },
+      })
+
+      const wrapped = getWrappedPolicies(policy)
+      expect(wrapped).toHaveLength(1)
+      expect(wrapped[0]).toBeInstanceOf(TimeoutPolicy)
+    })
   })
 
   describe('combined composition', () => {
-    it('wraps all four sub-policies in retry -> CB -> bulkhead -> fallback order', () => {
+    it('wraps all four sub-policies in retry -> CB -> bulkhead -> fallback order (no timeout)', () => {
       const policy = resiliencePolicyBuilder<unknown, void, string>({
         retry: { maxAttempts: 2, backoff: 50 },
         circuitBreaker: { breaker: 3, halfOpenAfter: 500 },
@@ -109,6 +131,68 @@ describe('resiliencePolicyBuilder', () => {
       expect(wrapped[3]).toBeInstanceOf(FallbackPolicy)
       // Composite is still an IPolicy with execute().
       expect(typeof (policy as { execute: unknown }).execute).toBe('function')
+    })
+
+    it('places retry OUTSIDE timeout (per-attempt deadline) when combined with CB/bulkhead/fallback', () => {
+      // Retry MUST wrap timeout so each attempt receives its own independent
+      // deadline — a slow attempt is cancelled by the inner timeout, then
+      // retry can issue a fresh attempt with a new timeout window. Placing
+      // timeout outermost would let the first slow attempt consume the full
+      // budget and starve the retries. Order assertion pins the contract:
+      // cockatiel's `wrap(outer, ..., inner)` yields a `wrapped` array in
+      // outer-to-inner order.
+      const policy = resiliencePolicyBuilder<unknown, void, string>({
+        timeout: 5_000,
+        retry: { maxAttempts: 2, backoff: 50 },
+        circuitBreaker: { breaker: 3, halfOpenAfter: 500 },
+        bulkhead: { limit: 5 },
+        fallback: { valueOrFactory: 'composite-fallback' },
+      })
+
+      const wrapped = getWrappedPolicies(policy)
+      expect(wrapped).toHaveLength(5)
+      expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
+      expect(wrapped[1]).toBeInstanceOf(TimeoutPolicy)
+      expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
+      expect(wrapped[3]).toBeInstanceOf(BulkheadPolicy)
+      expect(wrapped[4]).toBeInstanceOf(FallbackPolicy)
+    })
+  })
+
+  describe('timeout + retry per-attempt interaction', () => {
+    it('retries each timed-out attempt independently (per-attempt deadline)', async () => {
+      // Per-attempt semantics contract: the inner timeout cancels a slow
+      // attempt, then the outer retry issues a fresh attempt with a new
+      // timeout window. With Aggressive strategy + maxAttempts: 3 +
+      // backoff: 0, a perpetually slow function MUST be invoked exactly
+      // `maxAttempts` times and finally surface TaskCancelledError. If
+      // timeout were OUTERMOST, the first deadline would kill the entire
+      // pipeline and the function would only be invoked once.
+      jest.useFakeTimers()
+
+      try {
+        const slow = jest.fn(() => new Promise<never>(() => {}))
+
+        const policy = resiliencePolicyBuilder<unknown, void, never>({
+          timeout: { duration: 50, strategy: TimeoutStrategy.Aggressive },
+          retry: { maxAttempts: 2, backoff: 0 },
+        })
+
+        const pending = policy.execute(slow)
+        const rejected = expect(pending).rejects.toBeInstanceOf(TaskCancelledError)
+
+        // Advance well past 3 deadlines (50ms each) plus zero-delay backoff
+        // sleeps. `maxAttempts: 2` means the original call + 2 retries = 3
+        // total attempts.
+        await jest.advanceTimersByTimeAsync(500)
+        await rejected
+
+        // Three independent attempts confirms per-attempt semantics.
+        expect(slow).toHaveBeenCalledTimes(3)
+      }
+      finally {
+        jest.useRealTimers()
+      }
     })
   })
 
@@ -408,6 +492,134 @@ describe('resiliencePolicyBuilder', () => {
           throw new Error('other')
         }),
       ).rejects.toThrow('other')
+    })
+  })
+
+  describe('buildTimeoutPolicy', () => {
+    /**
+     * cockatiel's TimeoutPolicy stashes the duration on a private `duration`
+     * field. Tests reach into it via the documented escape hatch (same shape
+     * used elsewhere in this suite for `options.backoff` / `options.breaker`).
+     */
+    function getTimeoutDuration(policy: TimeoutPolicy): number {
+      return (policy as unknown as { duration: number }).duration
+    }
+
+    function getTimeoutStrategy(policy: TimeoutPolicy): TimeoutStrategy {
+      return (policy as unknown as { options: { strategy: TimeoutStrategy } }).options.strategy
+    }
+
+    it('builds a TimeoutPolicy with the supplied duration when given a number', () => {
+      const policy = buildTimeoutPolicy(5_000)
+
+      expect(policy).toBeInstanceOf(TimeoutPolicy)
+      expect(getTimeoutDuration(policy)).toBe(5_000)
+    })
+
+    it('defaults to TimeoutStrategy.Cooperative when given a bare-number config', () => {
+      // Cooperative is the safe default because axios honours the AbortSignal
+      // forwarded by `@ExecuteWithPolicy` and short-circuits the in-flight
+      // request without leaving an orphaned promise.
+      const policy = buildTimeoutPolicy(5_000)
+
+      expect(getTimeoutStrategy(policy)).toBe(TimeoutStrategy.Cooperative)
+    })
+
+    it('defaults to TimeoutStrategy.Cooperative when object config omits `strategy`', () => {
+      const policy = buildTimeoutPolicy({ duration: 5_000 })
+
+      expect(getTimeoutStrategy(policy)).toBe(TimeoutStrategy.Cooperative)
+    })
+
+    it('honours an explicit TimeoutStrategy.Aggressive when supplied', () => {
+      const policy = buildTimeoutPolicy({
+        duration: 5_000,
+        strategy: TimeoutStrategy.Aggressive,
+      })
+
+      expect(getTimeoutStrategy(policy)).toBe(TimeoutStrategy.Aggressive)
+    })
+
+    it('rejects with TaskCancelledError once the duration elapses (Aggressive strategy)', async () => {
+      // Aggressive strategy throws synchronously on the deadline, so the
+      // test does not depend on the wrapped function observing the signal.
+      jest.useFakeTimers()
+
+      try {
+        const policy = buildTimeoutPolicy({
+          duration: 50,
+          strategy: TimeoutStrategy.Aggressive,
+        })
+
+        // Wrapped fn never resolves on its own — the timeout MUST trip.
+        const pending = policy.execute(() => new Promise(() => {}))
+        // Capture rejection up-front so the unhandled-rejection detector
+        // does not mark the test flaky if the assertion runs after
+        // `jest.advanceTimersByTimeAsync` resolves.
+        const rejected = expect(pending).rejects.toBeInstanceOf(TaskCancelledError)
+
+        await jest.advanceTimersByTimeAsync(60)
+        await rejected
+      }
+      finally {
+        jest.useRealTimers()
+      }
+    })
+
+    it('resolves normally when the wrapped function completes before the deadline', async () => {
+      const policy = buildTimeoutPolicy(1_000)
+
+      await expect(policy.execute(async () => 'ok')).resolves.toBe('ok')
+    })
+
+    it('subscribes onSuccess when provided (and emits after a successful execution)', async () => {
+      const onSuccess = jest.fn()
+
+      const policy = buildTimeoutPolicy({ duration: 1_000, onSuccess })
+
+      await policy.execute(async () => 'ok')
+
+      expect(onSuccess).toHaveBeenCalledTimes(1)
+    })
+
+    it('subscribes onFailure when provided (and emits after a failing execution)', async () => {
+      const onFailure = jest.fn()
+
+      const policy = buildTimeoutPolicy({ duration: 1_000, onFailure })
+
+      await expect(policy.execute(async () => { throw new Error('boom') })).rejects.toThrow('boom')
+
+      expect(onFailure).toHaveBeenCalledTimes(1)
+    })
+
+    it('subscribes onTimeout when provided (and emits when the deadline trips)', async () => {
+      jest.useFakeTimers()
+
+      try {
+        const onTimeout = jest.fn()
+        const policy = buildTimeoutPolicy({
+          duration: 50,
+          strategy: TimeoutStrategy.Aggressive,
+          onTimeout,
+        })
+
+        const pending = policy.execute(() => new Promise(() => {}))
+        const rejected = expect(pending).rejects.toBeInstanceOf(TaskCancelledError)
+
+        await jest.advanceTimersByTimeAsync(60)
+        await rejected
+
+        expect(onTimeout).toHaveBeenCalledTimes(1)
+      }
+      finally {
+        jest.useRealTimers()
+      }
+    })
+
+    it('does not throw when onSuccess / onFailure / onTimeout are omitted (guards short-circuit)', async () => {
+      const policy = buildTimeoutPolicy({ duration: 1_000 })
+
+      await expect(policy.execute(async () => 'ok')).resolves.toBe('ok')
     })
   })
 })

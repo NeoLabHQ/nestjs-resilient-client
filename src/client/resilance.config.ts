@@ -1,14 +1,15 @@
 import type {
     CircuitState,
     FailureReason,
-    IBackoffFactory, 
-    ICountBreakerOptions, 
-    IExponentialBackoffOptions, 
-    IFailureEvent, 
-    IHalfOpenAfterBackoffContext, 
-    IRetryBackoffContext, 
-    ISamplingBreakerOptions, 
-    ISuccessEvent, 
+    IBackoffFactory,
+    ICountBreakerOptions,
+    IExponentialBackoffOptions,
+    IFailureEvent,
+    IHalfOpenAfterBackoffContext,
+    IRetryBackoffContext,
+    ISamplingBreakerOptions,
+    ISuccessEvent,
+    TimeoutStrategy,
 } from "cockatiel";
 
 export interface RetryConfig<T, S = void> {
@@ -89,10 +90,35 @@ export interface BulkheadConfig {
     onReject?: () => void;
 }
 
-/** 
- * Creates a policy that returns the valueOrFactory if an executed function fails. 
- * As the name suggests, valueOrFactory either be a value, 
- * or a function we'll call when a failure happens to create a value. 
+/**
+ * Caps the wall-clock duration of a single attempt. When the timeout elapses,
+ * cockatiel raises a `TaskCancelledError` (the `signal` it forwards on the
+ * `request()` path is also aborted, so axios cancels the in-flight HTTP
+ * call). The timeout is wrapped INSIDE retry in the resilience pipeline, so
+ * each retry attempt receives its own independent deadline — a 60 s timeout
+ * applies per attempt, allowing retry to recover from transient slowness.
+ */
+export interface TimeoutConfig {
+    /** Maximum duration per attempt, in milliseconds. */
+    duration: number;
+    /**
+     * Cooperative timeouts revoke the inner `AbortSignal` and let the wrapped
+     * function observe cancellation; aggressive timeouts immediately reject
+     * with `TaskCancelledError`. Defaults to {@link TimeoutStrategy.Cooperative}
+     * — axios honours `signal`, so the cooperative path lets the in-flight
+     * request short-circuit cleanly without leaving an orphaned promise.
+     */
+    strategy?: TimeoutStrategy;
+
+    onSuccess?: (data: ISuccessEvent) => void;
+    onFailure?: (data: IFailureEvent) => void;
+    onTimeout?: () => void;
+}
+
+/**
+ * Creates a policy that returns the valueOrFactory if an executed function fails.
+ * As the name suggests, valueOrFactory either be a value,
+ * or a function we'll call when a failure happens to create a value.
  * */
 export interface FallbackConfig<R = unknown> {
     shouldFallback?: (error: Error) => boolean;
@@ -115,10 +141,17 @@ export interface ResilanceConfig<T, S = void, R = unknown> {
      * Attempting to exceed the capacity will cause execute() to throw a BulkheadRejectedError.
      * */
     bulkhead?: BulkheadConfig;
-    /** 
-     * Creates a policy that returns the valueOrFactory if an executed function fails. 
-     * As the name suggests, valueOrFactory either be a value, 
-     * or a function we'll call when a failure happens to create a value. 
+    /**
+     * Creates a policy that returns the valueOrFactory if an executed function fails.
+     * As the name suggests, valueOrFactory either be a value,
+     * or a function we'll call when a failure happens to create a value.
      * */
     fallback?: FallbackConfig<R>;
+    /**
+     * Caps the wall-clock duration of a single attempt. Accepts either a bare
+     * duration in milliseconds (uses cooperative cancellation) or a full
+     * {@link TimeoutConfig}. Wraps INSIDE retry so each attempt is bounded
+     * independently — retries can recover from individual slow attempts.
+     */
+    timeout?: number | TimeoutConfig;
 }

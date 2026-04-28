@@ -13,7 +13,7 @@ This library wraps `@nestjs/axios`'s `HttpService` with a [cockatiel](https://gi
 
 ### Resilience pipeline
 
-`resiliencePolicyBuilder` (`src/client/resailencePolicyBuilder.ts`) composes any subset of `{ retry, circuitBreaker, bulkhead, fallback }` from `ResilanceConfig` (`src/client/resilance.config.ts`) into a single policy via cockatiel's `wrap(...)`. Wrap order is significant — outer policies see inner policies' results; the builder applies them in declaration order: retry → circuitBreaker → bulkhead → fallback. Empty config returns `NoopPolicy`.
+`resiliencePolicyBuilder` (`src/client/resailencePolicyBuilder.ts`) composes any subset of `{ retry, timeout, circuitBreaker, bulkhead, fallback }` from `ResilanceConfig` (`src/client/resilance.config.ts`) into a single policy via cockatiel's `wrap(...)`. Wrap order is significant — outer policies see inner policies' results; the builder applies them in declaration order: retry → timeout → circuitBreaker → bulkhead → fallback. Timeout sits INSIDE retry so each attempt receives its own independent deadline (per-attempt semantics) — a slow attempt is cancelled by the timeout, then retry can issue a fresh attempt with a new timeout window. Empty config returns `NoopPolicy`.
 
 Each sub-builder accepts a polymorphic config field and resolves it to a cockatiel primitive:
 - `retry.backoff`: `number` → `ConstantBackoff`, `Array<number>` → `IterableBackoff`, object with `.next()` → backoff factory, else `ExponentialBackoff`.
@@ -25,5 +25,5 @@ Each sub-builder accepts a polymorphic config field and resolves it to a cockati
 - Non-axios errors → retry (treated as parsing/internal).
 - Axios errors → retry only if the request method is in the configured allow-list (`SAFE_HTTP_METHODS = GET/HEAD/OPTIONS`; `RESTFULL` extends with PUT/DELETE) **and** the error is a network/internal/5xx error. A `CODE_EXCLUDE_LIST` blocks retry on cancellations and SSL/cert failures.
 
-When adding a new preset, define the `RetryConfig.shouldRetry` against `isRetryableError(error, methods)` rather than re-implementing the method/status logic. The README's documented per-preset timeouts are not yet implemented in the policy presets — timeout is currently set on the underlying axios instance by the consumer.
+When adding a new preset, define the `RetryConfig.shouldRetry` against `isRetryableError(error, methods)` rather than re-implementing the method/status logic. Per-preset request timeouts are implemented via cockatiel's `TimeoutPolicy` wrapped INSIDE retry so each attempt is bounded independently — `CONSERVATIVE` 60 s, `RESTFULL` 10 s, `LOW_QUALITY` 180 s applied per attempt. Override or disable by composing a custom `ResilanceConfig` with a different `timeout` value (or omitting the field entirely).
 

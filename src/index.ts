@@ -1,5 +1,6 @@
 // Runtime client classes
 export { RestClient } from './client/rest.client'
+export { RestModule } from './client/rest.module'
 export { AuthRestClient } from './auth/auth-rest.client'
 export { AuthStrategyService } from './auth/auth-strategy.service'
 export { AuthRestModule } from './auth/auth-rest.module'
@@ -22,4 +23,5 @@ export type {
   CircuitBreakerConfig,
   BulkheadConfig,
   FallbackConfig,
+  TimeoutConfig,
 } from './client/resilance.config'

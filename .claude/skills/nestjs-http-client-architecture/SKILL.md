@@ -78,7 +78,7 @@ This skill documents the architecture of the `nestjs-http-client` library. The l
 | `cockatiel@3.2.1` | Resilience policies (retry, CB, bulkhead, fallback) | Already installed | In package.json dependencies |
 | `axios@^1.14.0` | HTTP client | Already installed | In package.json dependencies |
 | `jest@29.7` | Test runner (unit + e2e) | **MUST INSTALL** | Replace vitest; use ts-jest preset |
-| `ts-jest@29` | TypeScript transformer for Jest | **MUST INSTALL** | Needs tsconfig.test.json |
+| `ts-jest@29` | TypeScript transformer for Jest | **MUST INSTALL** | Use inline `tsconfig` overrides in jest config transform block |
 | `@types/jest@29` | Type declarations for Jest | **MUST INSTALL** | Required for TS tests |
 | `jest-it-up@4.0.1` | Auto-bump jest coverage thresholds | **MUST INSTALL** | Reads jest.config coverageThreshold |
 | `@stryker-mutator/core@8` | Mutation testing engine | **MUST INSTALL** | v8 compatible with jest@29 |
@@ -90,9 +90,9 @@ This skill documents the architecture of the `nestjs-http-client` library. The l
 
 ### Recommended Stack
 
-Use jest@29 + ts-jest (with a separate tsconfig.test.json using node moduleResolution) for both unit and e2e tests. Use `jest-it-up` as posttest:unit. Use Stryker v8 (not v9) + jest runner for mutation testing at 80% break threshold. Use `testcontainers` with `GenericContainer` (httpbin or echo-server image) for e2e dummy service.
+Use jest@29 + ts-jest (with inline `tsconfig` overrides in the transform block using `moduleResolution: "node"`) for both unit and e2e tests. Use `jest-it-up` as posttest:unit. Use Stryker v8 (not v9) + jest runner for mutation testing at 80% break threshold. Use `testcontainers` with `GenericContainer` (httpbin or echo-server image) for e2e dummy service.
 
-**IMPORTANT**: The project uses `tsdown` with `moduleResolution: "bundler"` in tsconfig.json. Jest requires CommonJS + `moduleResolution: "node"`. Always create a separate `tsconfig.test.json` that overrides these settings.
+**IMPORTANT**: The project uses `tsdown` with `moduleResolution: "bundler"` in tsconfig.json. Jest requires CommonJS + `moduleResolution: "node"`. Use inline `tsconfig` overrides in the ts-jest transform block rather than a separate tsconfig file — this avoids maintaining a second tsconfig and keeps the build toolchain (tsdown) unaffected.
 
 ---
 
@@ -248,40 +248,43 @@ function Authenticate() {
 }
 ```
 
-### Pattern 4: jest tsconfig for bundler-moduleResolution projects
+### Pattern 4: jest inline tsconfig overrides for bundler-moduleResolution projects
 
 **When to use**: Any project where tsconfig.json uses `moduleResolution: "bundler"` (tsdown projects) but you need to run jest.
 
-**Trade-offs**: Requires maintaining a second tsconfig. Only used during testing.
-
-```json
-// tsconfig.test.json
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "module": "commonjs",
-    "moduleResolution": "node"
-  }
-}
-```
+**Approach**: Pass compiler overrides directly in the ts-jest `transform` block instead of maintaining a separate tsconfig file. This keeps the root tsconfig unchanged and avoids file proliferation.
 
 ```typescript
 // jest.config.ts
 import type { Config } from 'jest'
 
 const config: Config = {
-  preset: 'ts-jest',
   testEnvironment: 'node',
-  globals: {
-    'ts-jest': {
-      tsconfig: 'tsconfig.test.json',
-    },
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        // Inline overrides so Jest (CommonJS) can import TypeScript source
+        // without a bundler. The root tsconfig uses moduleResolution:"bundler"
+        // for tsdown; these overrides apply only during test runs.
+        tsconfig: {
+          module: 'commonjs',
+          moduleResolution: 'node',
+          esModuleInterop: true,
+          verbatimModuleSyntax: false,
+          types: ['node', 'jest'],
+          emitDecoratorMetadata: false,
+        },
+      },
+    ],
   },
   testMatch: ['**/__tests__/**/*.spec.ts'],
   // ... coverage settings
 }
-export default config
+module.exports = config
 ```
+
+**Note on `emitDecoratorMetadata: false`**: Disabling this prevents Istanbul from counting `typeof D !== "undefined"` guards emitted for generic method parameters as uncoverable branches, which would otherwise cause coverage to dip below the threshold.
 
 ### Pattern 5: AuthRestModule Dynamic Module
 
@@ -332,11 +335,11 @@ export class AuthRestModule {
 |-------|--------|----------|
 | **`base-decorators` NOT in package.json** | Critical | Run `npm install base-decorators@1.1.0` before any decorator work; it is NOT yet a dependency |
 | **`./cache.decorator` does not exist** | Critical | The file `src/deduplicate-inflight.decorator.ts` imports `KeyBuilder` from `./cache.decorator` which is missing. Create `./cache.decorator.ts` with `export type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string`, OR define `KeyBuilder` locally in `deduplicate-inflight.decorator.ts` and remove the import |
-| **`@/cache` path alias not configured** | Critical | `tsconfig.json` has no `paths` field. `src/deduplicate-inflight.decorator.spec.ts` imports from `@/cache/deduplicate-inflight.decorator`. Either add `paths: { "@/*": ["src/*"] }` to tsconfig.json and tsconfig.test.json, OR change import to a relative path |
+| **`@/cache` path alias not configured** | Critical | `tsconfig.json` has no `paths` field. `src/deduplicate-inflight.decorator.spec.ts` imports from `@/cache/deduplicate-inflight.decorator`. Either add `paths: { "@/*": ["src/*"] }` to tsconfig.json (the inline jest transform picks up paths from the root tsconfig), OR change import to a relative path |
 | **`vitest` must be removed before jest** | High | `vitest@^4.0.16` is currently installed. Run `npm uninstall vitest` before installing jest to avoid conflicts. The `test` script in package.json currently calls vitest |
 | **`tests/index.test.ts` imports `fn` from `'../src'`** | High | `fn` is not exported from `src/index.ts`. Delete or replace this file — it is a vitest smoke test left over from project scaffolding and has no relationship to the actual library |
 | **`extendLastConfigArg` / `extendConfigArg` are undefined** | Critical | These helpers are called in Pattern 3 (@Authenticate) but are never defined anywhere in the codebase. Define inline config-extension logic within the decorator factory as shown in Pattern 3 above |
-| **`moduleResolution: "bundler"` breaks jest** | High | Create `tsconfig.test.json` with `"module": "commonjs"` and `"moduleResolution": "node"` |
+| **`moduleResolution: "bundler"` breaks jest** | High | Add inline `tsconfig` overrides in the ts-jest `transform` block with `"module": "commonjs"` and `"moduleResolution": "node"` — no separate tsconfig file needed |
 | **`context.target` type not narrowed** | Medium | Type the `Wrap` generic: `Wrap<{ policy: IPolicy }>` |
 | **DeduplicateInflight requires `inflightMap` property** | High | Always declare `readonly inflightMap = new Map<string, Promise<unknown>>()` on the class |
 | **Policy.execute expects synchronous return in some versions** | Medium | Always `await` inside execute callback; use `firstValueFrom` to unwrap Observables |
@@ -353,7 +356,7 @@ export class AuthRestModule {
 2. **Fix `./cache.decorator` import immediately** — `deduplicate-inflight.decorator.ts` will not compile until this missing file is created or the import is replaced with a local type definition.
 3. **Use `Wrap` for any decorator that modifies arguments or needs full execution control** — `Effect`/`OnInvokeHook` cannot modify args; `Wrap` is the only primitive that allows replacing what is passed to the original method.
 4. **Always pass `exclusionKey` to `Wrap`** — prevents double-wrapping conflicts when multiple `Wrap`-based decorators (`@ExecuteWithPolicy`, `@DeduplicateInflight`, `@Authenticate`) are applied to the same class.
-5. **Separate tsconfig.test.json** — never modify the root `tsconfig.json` for jest compatibility; the build toolchain (tsdown) depends on `moduleResolution: "bundler"`.
+5. **Use inline tsconfig overrides in the ts-jest transform block** — never modify the root `tsconfig.json` for jest compatibility; the build toolchain (tsdown) depends on `moduleResolution: "bundler"`. Pass overrides directly in the `transform` config so no extra tsconfig file is needed.
 6. **Use Stryker v8 + jest@29** — Stryker v9 may require jest@30.
 7. **DeduplicateInflight on `performAuthenticate` not `authenticateIfNeeded`** — the public `authenticateIfNeeded` checks state first; the decorated private method is the actual network call that should be deduplicated.
 
@@ -397,7 +400,7 @@ npm install --save-dev testcontainers@11.14.0
 
 # Fix path alias in tsconfig.json (add paths field):
 # "paths": { "@/*": ["src/*"] }
-# Also add same paths to tsconfig.test.json
+# The inline jest transform picks up paths from the root tsconfig automatically
 
 # Delete broken vitest smoke test:
 # rm tests/index.test.ts
@@ -423,12 +426,28 @@ npm install --save-dev testcontainers@11.14.0
 ```typescript
 import type { Config } from 'jest'
 
+// Use `module.exports =` (not `export default`) so jest-it-up can load this
+// file via Node's `require()` — Node's strip-only TS loader rejects `export =`.
 const config: Config = {
-  preset: 'ts-jest',
   testEnvironment: 'node',
-  globals: { 'ts-jest': { tsconfig: 'tsconfig.test.json' } },
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        // Inline overrides: Jest needs CommonJS + node moduleResolution.
+        // Root tsconfig uses moduleResolution:"bundler" for tsdown builds.
+        tsconfig: {
+          module: 'commonjs',
+          moduleResolution: 'node',
+          esModuleInterop: true,
+          verbatimModuleSyntax: false,
+          types: ['node', 'jest'],
+          emitDecoratorMetadata: false,
+        },
+      },
+    ],
+  },
   testMatch: ['**/src/**/__tests__/**/*.spec.ts'],
-  collectCoverage: true,
   collectCoverageFrom: ['src/**/*.ts', '!src/**/__tests__/**', '!src/index.ts'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html', 'json-summary'],
@@ -437,7 +456,7 @@ const config: Config = {
     global: { branches: 80, functions: 80, lines: 80, statements: 80 },
   },
 }
-export default config
+module.exports = config
 ```
 
 **jest.e2e.config.ts** (e2e tests):
@@ -445,13 +464,26 @@ export default config
 import type { Config } from 'jest'
 
 const config: Config = {
-  preset: 'ts-jest',
   testEnvironment: 'node',
-  globals: { 'ts-jest': { tsconfig: 'tsconfig.test.json' } },
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          module: 'commonjs',
+          moduleResolution: 'node',
+          esModuleInterop: true,
+          verbatimModuleSyntax: false,
+          types: ['node', 'jest'],
+          emitDecoratorMetadata: false,
+        },
+      },
+    ],
+  },
   testMatch: ['**/tests/**/*.spec.ts'],
   testTimeout: 60000,
 }
-export default config
+module.exports = config
 ```
 
 **stryker.config.json**:
@@ -461,7 +493,7 @@ export default config
   "coverageAnalysis": "perTest",
   "jest": { "projectType": "custom", "configFile": "jest.config.ts" },
   "checkers": ["typescript"],
-  "tsconfigFile": "tsconfig.test.json",
+  "tsconfigFile": "tsconfig.json",
   "mutate": ["src/**/*.ts", "!src/**/__tests__/**/*.ts", "!src/index.ts"],
   "reporters": ["html", "text", "progress"],
   "thresholds": { "high": 80, "low": 60, "break": 80 }

@@ -33,9 +33,68 @@ Proactive policies engage *before* a failure to manage load.
 
 ## Quick Start
 
-### Bare `RestClient` (no auth)
 
-For requests that do not require authentication, construct `RestClient` directly. It accepts a `HttpService` (from `@nestjs/axios`) and an optional `ResilanceConfig`. When the config is omitted, `RestClient` falls back to the `CONSERVATIVE` preset.
+For requests that do not require authentication, `RestModule.forRootAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilanceConfig` is omitted, the `CONSERVATIVE` preset is applied.
+
+```ts
+import { Module } from '@nestjs/common'
+import {
+  RestModule,
+  ResilencePresets,
+  resiliencePolicyPresets,
+} from 'nestjs-http-client'
+
+@Module({
+  imports: [
+    RestModule.forRootAsync({
+      useFactory: () => ({
+        // Forwarded verbatim to the internally-registered HttpModule.
+        axiosConfig: { // TODO: rename axiosConfig to axios
+          baseURL: 'https://api.example.com',
+        },
+        // Optional. Omit for the CONSERVATIVE preset (the documented default).
+        resilanceConfig: resiliencePolicyPresets[ResilencePresets.RESTFULL],
+      }),
+    }),
+  ],
+  exports: [RestModule],
+})
+export class CatalogModule {}
+```
+
+`RestModule` exports `RestClient`, so any provider in `CatalogModule` (or modules that import it) can inject `RestClient` directly:
+
+```ts
+import { Injectable } from '@nestjs/common'
+import { RestClient } from 'nestjs-http-client'
+
+@Injectable()
+export class CatalogService {
+  constructor(private readonly client: RestClient) {}
+
+  // Resolves to https://api.example.com/products/42
+  async getProduct(id: string) {
+    const response = await this.client.get<Product>(`/products/${id}`)
+    return response.data
+  }
+}
+```
+
+The factory accepts the same `inject`/`imports` keys as any NestJS dynamic module, so axios and resilience configuration can be sourced from `ConfigService` or any other DI provider:
+
+```ts
+RestModule.forRootAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => ({
+    axiosConfig: { baseURL: config.get('API_BASE_URL') },
+  }),
+})
+```
+
+### Bare `RestClient` (no auth, manual wiring)
+
+If you already have an `HttpService` provider (for example shared across multiple modules), construct `RestClient` directly. It accepts a `HttpService` (from `@nestjs/axios`) and an optional `ResilanceConfig`. When the config is omitted, `RestClient` falls back to the `CONSERVATIVE` preset.
 
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
@@ -78,8 +137,80 @@ export class CatalogService {
 }
 ```
 
-// TODO: add example where base domain is set using axios.create({ baseURL: ... }) at provider level.
-// TODO: add example where reslience config is set from RESTFUL preset. And example where config build from scratch.
+
+### Switching resilience presets
+
+Pass a preset to switch the retry and circuit-breaker policy without writing any configuration:
+
+```ts
+import { HttpModule, HttpService } from '@nestjs/axios'
+import { Module } from '@nestjs/common'
+import {
+  RestClient,
+  ResilencePresets,
+  resiliencePolicyPresets,
+} from 'nestjs-http-client'
+
+@Module({
+  imports: [HttpModule.register({ baseURL: 'https://api.example.com' })],
+  providers: [
+    {
+      provide: RestClient,
+      useFactory: (http: HttpService) =>
+        new RestClient(http, resiliencePolicyPresets[ResilencePresets.RESTFULL]), // TODO: change enum to const object, so it can be used like new RestClient(http, ResilencePresets.RESTFULL)
+      inject: [HttpService],
+    },
+  ],
+  exports: [RestClient],
+})
+export class OrdersModule {}
+```
+
+### Building a resilience config from scratch
+
+Compose only the policies you need. Unspecified fields are omitted from the pipeline entirely:
+
+```ts
+import { HttpModule, HttpService } from '@nestjs/axios'
+import { Module } from '@nestjs/common'
+import { RestClient, type ResilanceConfig } from 'nestjs-http-client'
+import { isAxiosError } from 'axios'
+
+const customConfig: ResilanceConfig<unknown> = {
+  retry: {
+    maxAttempts: 5,
+    // Constant 200 ms delay between every attempt
+    backoff: 200,
+    // Only retry on 5xx or network errors (no response at all)
+    shouldRetry: (error) =>
+      isAxiosError(error) && (!error.response || error.response.status >= 500),
+  },
+  circuitBreaker: {
+    // Open the breaker after 3 consecutive failures
+    breaker: 3,
+    // Allow one probe request after 30 s
+    halfOpenAfter: 30_000,
+  },
+  bulkhead: {
+    // At most 10 concurrent requests; queue up to 20 more
+    limit: 10,
+    queue: 20,
+  },
+}
+
+@Module({
+  imports: [HttpModule],
+  providers: [
+    {
+      provide: RestClient,
+      useFactory: (http: HttpService) => new RestClient(http, customConfig),
+      inject: [HttpService],
+    },
+  ],
+  exports: [RestClient],
+})
+export class DataModule {}
+```
 
 ### Authenticated client — Bearer token
 
@@ -88,7 +219,7 @@ export class CatalogService {
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
 import { Module } from '@nestjs/common'
-import { AuthRestModule, type AuthStrategy } from 'nestjs-http-client'
+import { AuthRestModule, RestClient, type AuthStrategy } from 'nestjs-http-client'
 
 @Module({
   imports: [
@@ -99,8 +230,9 @@ import { AuthRestModule, type AuthStrategy } from 'nestjs-http-client'
       useFactory: (httpService: HttpService) => ({
         httpService,
         authConfig: {
-          // TODO: example is incorrect, it should recive RestClient, instead of HttpService. Add test for this case, fix it if it not works.
-          authenticate: async (client): Promise<AuthStrategy> => {
+          // `client` is a fully resilient RestClient — auth requests reuse the
+          // same resilience policy stack (retry, circuit breaker, …) as app calls.
+          authenticate: async (client: RestClient): Promise<AuthStrategy> => {
             const tokenResponse = await client.post<{ access_token: string, expires_in: number }>(
               'https://auth.example.com/oauth/token',
               { grant_type: 'client_credentials', client_id: '...', client_secret: '...' },
@@ -206,13 +338,13 @@ Same retry surface as `CONSERVATIVE`; named separately so consumers can extend i
 - `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
 
-> **Note on timeouts.** Per-preset request timeouts are not yet implemented in the policy presets. Configure `timeout` on the underlying axios instance through `HttpModule.register({ timeout: ... })` or by passing `config.timeout` per request.
+> **Note on timeouts.** Temouts is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it. If you want to fully override them, change the policy timeout.
 
 ## Behaviour notes
 
 - **401 retry** — `AuthRestClient` retries (amount depends on resilience configuration) after a 401: drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then re-invokes the wrapped `RestClient` method. Non-401 errors are rethrown without touching the cached strategy.
 - **Concurrent authentication** — any number of concurrent authentication attempts result in single real request to authentication service.
-- **Cancellation** — the cockatiel `signal` is forwarded into axios on the generic `request()` path. The per-method helpers (`get`, `post`, ...) currently do not forward the signal. // TODO: make them forward the signal.
+- **Cancellation** — the cockatiel `signal` is forwarded into axios on the generic `request()` path. The per-method helpers (`get`, `post`, ...) do not currently forward the signal; pass cancellation via the `signal` field of the per-request `AxiosRequestConfig` if you need cooperative cancellation on those methods. // TODO: automatically forward the signal for all methods.
 
 ## API Reference
 
@@ -271,6 +403,31 @@ AuthRestModule.forRootAsync(options: {
 
 `HttpModule` is always imported alongside the caller's `imports`, so factories may `inject: [HttpService]` directly.
 
+#### `RestModule`
+
+NestJS dynamic module that wires `REST_MODULE_OPTIONS`, an internally-managed `HttpModule` (registered with the consumer-supplied axios config), and `RestClient`. Exports `RestClient`.
+
+```ts
+RestModule.forRootAsync(options: {
+  useFactory: (...args: unknown[]) => Promise<RestModuleOptions> | RestModuleOptions
+  inject?: unknown[]
+  imports?: unknown[]
+}): DynamicModule
+```
+
+The factory returns a `RestModuleOptions` object:
+
+```ts
+interface RestModuleOptions {
+  /** Axios configuration forwarded to the internally-registered `HttpModule`. */
+  axiosConfig?: HttpModuleOptions
+  /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
+  resilanceConfig?: ResilanceConfig<unknown>
+}
+```
+
+`HttpModule` is registered asynchronously inside the module, so consumers do not need to import it themselves. The `inject` and `imports` keys are forwarded to the internal `HttpModule.registerAsync` call, so the factory can depend on any provider exported from `imports` (e.g. `ConfigService`).
+
 ### Configuration types
 
 #### `AuthConfig`
@@ -308,12 +465,72 @@ interface ResilanceConfig<T, S = void, R = unknown> {
   circuitBreaker?: CircuitBreakerConfig
   bulkhead?: BulkheadConfig
   fallback?: FallbackConfig<R>
+  timeout?: number | TimeoutConfig
 }
 ```
 
-Sub-types `RetryConfig`, `CircuitBreakerConfig`, `BulkheadConfig`, and `FallbackConfig` are exported as type-only aliases; see `src/client/resilance.config.ts` for the full field-level documentation.
+Sub-types `RetryConfig`, `CircuitBreakerConfig`, `BulkheadConfig`, `FallbackConfig`, and `TimeoutConfig` are exported as type-only aliases; see `src/client/resilance.config.ts` for the full field-level documentation. The `timeout` field accepts either a bare millisecond duration (cooperative cancellation) or a full `TimeoutConfig` for finer-grained control.
 
-// TODO: add examples building resilience configs from scratch.
+**Example — retry only:**
+
+```ts
+import { ExponentialBackoff } from 'cockatiel'
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+const retryOnlyConfig: ResilanceConfig<unknown> = {
+  retry: {
+    maxAttempts: 3,
+    backoff: new ExponentialBackoff(),
+  },
+}
+```
+
+**Example — retry + circuit breaker:**
+
+```ts
+import { ExponentialBackoff } from 'cockatiel'
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+const retryWithBreakerConfig: ResilanceConfig<unknown> = {
+  retry: {
+    maxAttempts: 3,
+    backoff: new ExponentialBackoff(),
+  },
+  circuitBreaker: {
+    // Open after 5 consecutive failures; probe again after 30 s.
+    breaker: 5,
+    halfOpenAfter: 30_000,
+  },
+}
+```
+
+**Example — all five policies:**
+
+```ts
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+const fullyConfigured: ResilanceConfig<unknown, void, string> = {
+  retry: {
+    maxAttempts: 3,
+    // Array-based backoff: 100 ms, then 500 ms, then 500 ms for all further attempts.
+    backoff: [100, 500],
+  },
+  circuitBreaker: {
+    // SamplingBreaker: open when ≥ 50 % of requests over 30 s window fail.
+    breaker: { threshold: 0.5, duration: 30_000, minimumRps: 10 },
+    halfOpenAfter: 60_000,
+  },
+  bulkhead: {
+    limit: 20,
+    queue: 40,
+  },
+  fallback: {
+    valueOrFactory: 'service-unavailable',
+  },
+  // Per-attempt deadline: every retry attempt is bounded by its own 30 s window.
+  timeout: 30_000,
+}
+```
 
 #### `ResilencePresets`
 

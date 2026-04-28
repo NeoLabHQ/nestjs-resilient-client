@@ -309,17 +309,24 @@ describe('AuthRestClient', () => {
       },
     )
 
-    it('request forwards (config) to the underlying RestClient', async () => {
+    it('request forwards the merged (config) to the underlying RestClient', async () => {
       const { client, restClient, authStrategy } = buildSut()
 
       await client.request({ url: '/raw', method: 'GET' })
 
       expect(restClient.request).toHaveBeenCalledTimes(1)
-      // The `request` verb's config sits at args[0] on the public surface but
-      // the decorator's `configArgIndex('request') === 1` writes the extended
-      // config into args[1]. The forwarded args[0] is the caller's original
-      // config object, untouched.
-      expect(restClient.request.mock.calls[0]![0]).toEqual({ url: '/raw', method: 'GET' })
+      // `request` declares its config accessor at index 0, so the decorator
+      // writes the merged config back into args[0]. The underlying RestClient
+      // therefore receives the caller's config plus the strategy's
+      // Authorization header.
+      expect(restClient.request).toHaveBeenCalledWith({
+        url: '/raw',
+        method: 'GET',
+        headers: { Authorization: 'Bearer X' },
+      })
+      // The strategy must observe the original (un-augmented) config so that
+      // re-authentication after a 401 starts from the caller-supplied state.
+      expect(authStrategy.extendRequest).toHaveBeenCalledWith({ url: '/raw', method: 'GET' })
       // Pre-flight authenticate ran exactly once.
       expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
     })

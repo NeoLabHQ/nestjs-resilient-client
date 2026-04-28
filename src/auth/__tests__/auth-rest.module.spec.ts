@@ -2,7 +2,7 @@ import type { HttpService } from '@nestjs/axios'
 import { Test } from '@nestjs/testing'
 import type { TestingModule } from '@nestjs/testing'
 import type { AxiosError, AxiosResponse } from 'axios'
-import { CircuitBreakerPolicy, RetryPolicy } from 'cockatiel'
+import { CircuitBreakerPolicy, RetryPolicy, TimeoutPolicy } from 'cockatiel'
 import { of, throwError } from 'rxjs'
 
 import { RestClient } from '../../client/rest.client'
@@ -179,19 +179,26 @@ describe('AuthRestModule.forRootAsync', () => {
   })
 
   describe('default-preset fallback (factory omits `resilanceConfig`)', () => {
-    it('resolved RestClient.policy is the CONSERVATIVE composition: RetryPolicy(maxAttempts=3) wrapping CircuitBreakerPolicy', async () => {
+    it('resolved RestClient.policy is the CONSERVATIVE composition: RetryPolicy(maxAttempts=3) wrapping TimeoutPolicy(60s) wrapping CircuitBreakerPolicy', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       const { restClient } = await bootstrap({ httpService: stubHttp })
 
-      // CONSERVATIVE = retry + circuitBreaker — `wrap(...)` returns an object
-      // with a `wrapped` field listing the composed sub-policies. Same
-      // structural inspection used by `rest.client.spec.ts` for the same
-      // assertion against the no-config constructor path.
+      // CONSERVATIVE = retry + timeout + circuitBreaker. Retry sits OUTSIDE
+      // timeout so each attempt receives its own independent 60 s deadline
+      // (per-attempt semantics) — `wrap(...)` returns an object with a
+      // `wrapped` field listing the composed sub-policies in outer-to-inner
+      // order. Same structural inspection used by `rest.client.spec.ts` for
+      // the same assertion against the no-config constructor path.
       const wrapped = (restClient.policy as unknown as { wrapped: unknown[] }).wrapped
-      expect(wrapped).toHaveLength(2)
+      expect(wrapped).toHaveLength(3)
       expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
-      expect(wrapped[1]).toBeInstanceOf(CircuitBreakerPolicy)
+      expect(wrapped[1]).toBeInstanceOf(TimeoutPolicy)
+      expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
+
+      // Pin the per-attempt 60 s deadline documented in the README.
+      const timeoutDuration = (wrapped[1] as unknown as { duration: number }).duration
+      expect(timeoutDuration).toBe(60_000)
 
       const retryOptions = (wrapped[0] as unknown as { options: { maxAttempts: number } }).options
       expect(retryOptions.maxAttempts).toBe(3)

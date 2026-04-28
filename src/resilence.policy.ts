@@ -34,20 +34,28 @@ export const defaultCircutBreaker: CircuitBreakerConfig = {
     },
 }
 
+// Timeout budget is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it.
+export const CONSERVATIVE_TIMEOUT_MS = 60_000;
+export const RESTFULL_TIMEOUT_MS = 10_000;
+export const LOW_QUALITY_TIMEOUT_MS = 180_000;
+
 export const resiliencePolicyPresets: Record<ResilencePresets, ResilanceConfig<number, void, number>> = {
     [ResilencePresets.CONSERVATIVE]: {
         retry: safeMethodsRetry,
         circuitBreaker: defaultCircutBreaker,
+        timeout: CONSERVATIVE_TIMEOUT_MS,
     },
     [ResilencePresets.RESTFULL]: {
         retry: {
             ...safeMethodsRetry,
             shouldRetry: error => isRetryableError(error, IDEMPOTENT_HTTP_METHODS),
         },
-        circuitBreaker: defaultCircutBreaker
+        circuitBreaker: defaultCircutBreaker,
+        timeout: RESTFULL_TIMEOUT_MS,
     },
     [ResilencePresets.LOW_QUALITY]: {
         retry: safeMethodsRetry,
-        circuitBreaker: defaultCircutBreaker
+        circuitBreaker: defaultCircutBreaker,
+        timeout: LOW_QUALITY_TIMEOUT_MS,
     },
 };

@@ -4,7 +4,7 @@
     "configFile": "jest.config.ts"
   },
   "checkers": ["typescript"],
-  "tsconfigFile": "tsconfig.test.json",
+  "tsconfigFile": "tsconfig.json",
   "mutate": ["src/**/*.ts", "!src/**/__tests__/**"],
   "ignoreStatic": true,
   "thresholds": {

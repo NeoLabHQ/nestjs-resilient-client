@@ -20,7 +20,7 @@ npm run dev
 
 ## Testing
 
-The project ships four `npm` scripts; they all match `package.json` exactly and all set `TS_NODE_PROJECT=tsconfig.test.json` so `ts-jest` and `stryker` resolve types via the dedicated test tsconfig.
+The project ships four `npm` scripts; they all match `package.json` exactly and all set `TS_NODE_PROJECT=tsconfig.json` so `ts-jest` and `stryker` resolve types correctly.
 
 ### `npm run test:unit`
 
@@ -28,14 +28,12 @@ Runs the unit suite with Jest using `jest.config.ts` and produces a coverage rep
 
 ```bash
 npm run test:unit
-# TS_NODE_PROJECT=tsconfig.test.json jest --config jest.config.ts --coverage
 ```
 
 A `posttest:unit` hook runs [`jest-it-up`](https://github.com/dollarshaveclub/jest-it-up) to ratchet the coverage thresholds in `jest.config.ts` whenever a run exceeds the current floor.
 
 ```bash
 # Runs automatically after `npm run test:unit`
-# TS_NODE_PROJECT=tsconfig.test.json npx jest-it-up --config jest.config.ts
 ```
 
 No external services are required for this command.
@@ -46,7 +44,6 @@ Runs the end-to-end suite with Jest using `jest.e2e.config.ts`. The suite spins 
 
 ```bash
 npm run test:e2e
-# TS_NODE_PROJECT=tsconfig.test.json jest --config jest.e2e.config.ts
 ```
 
 **Requires Docker** — the testcontainers global setup will fail if the Docker daemon is not running. On Linux, ensure your user is in the `docker` group; on macOS / Windows, ensure Docker Desktop is started.
@@ -57,7 +54,6 @@ Runs [Stryker](https://stryker-mutator.io/) to compute the mutation score agains
 
 ```bash
 npm run test:mutation
-# TS_NODE_PROJECT=tsconfig.test.json stryker run
 ```
 
 No external services are required for this command, but it runs the full unit suite many times and is the slowest of the three.

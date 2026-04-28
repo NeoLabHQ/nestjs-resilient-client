@@ -1,11 +1,12 @@
 import * as publicSurface from '../index'
 
 import { RestClient } from '../client/rest.client'
+import { RestModule } from '../client/rest.module'
 import { AuthRestClient } from '../auth/auth-rest.client'
 import { AuthStrategyService } from '../auth/auth-strategy.service'
 import { AuthRestModule } from '../auth/auth-rest.module'
 import { ExecuteWithPolicy } from '../client/execute-with-policy.decorator'
-import { Authenticate } from '../auth/authenticate.decorator'
+import { Authenticate, configAt } from '../auth/authenticate.decorator'
 import { DeduplicateInflight } from '../deduplicate-inflight.decorator'
 import {
   ResilencePresets as DirectResilencePresets,
@@ -39,6 +40,10 @@ describe('public surface (src/index.ts)', () => {
     it('exports the AuthRestModule class identical to the source class', () => {
       expect(publicSurface.AuthRestModule).toBe(AuthRestModule)
     })
+
+    it('exports the RestModule class identical to the source class', () => {
+      expect(publicSurface.RestModule).toBe(RestModule)
+    })
   })
 
   describe('decorator factory re-exports', () => {
@@ -52,6 +57,10 @@ describe('public surface (src/index.ts)', () => {
 
     it('exports the DeduplicateInflight decorator identical to the source factory', () => {
       expect(publicSurface.DeduplicateInflight).toBe(DeduplicateInflight)
+    })
+
+    it('exports the configAt accessor factory identical to the source function', () => {
+      expect(publicSurface.configAt).toBe(configAt)
     })
   })
 
@@ -78,9 +87,9 @@ describe('public surface (src/index.ts)', () => {
 
   describe('exhaustive named export list', () => {
     it('exports exactly the runtime + enum + lookup symbols documented in README', () => {
-      // Type-only exports (AuthConfig, AuthStrategy, ResilanceConfig, etc.)
+      // Type-only exports (AuthConfig, AuthStrategy, ResilanceConfig, ConfigAccessor, etc.)
       // are erased at runtime; the runtime keys must therefore be exactly the
-      // 9 symbols below. Drift here is a public-API change.
+      // 11 symbols below. Drift here is a public-API change.
       const actualKeys = Object.keys(publicSurface).sort()
       expect(actualKeys).toEqual(
         [
@@ -92,6 +101,8 @@ describe('public surface (src/index.ts)', () => {
           'ExecuteWithPolicy',
           'ResilencePresets',
           'RestClient',
+          'RestModule',
+          'configAt',
           'resiliencePolicyPresets',
         ].sort(),
       )

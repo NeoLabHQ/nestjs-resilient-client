@@ -98,12 +98,21 @@ export function isNetworkError(error: AxiosError) {
 
 
 export function isInternalError(error: AxiosError): boolean {
-    return (
-        error.code !== 'ECONNABORTED' &&
-        (!error.response ||
-            error.response.status !== undefined ||
-            error.response.status === 429 ||
-            (error.response.status >= 500 && error.response.status <= 599))
-    );
+    if (error.code === 'ECONNABORTED') {
+        return false;
+    }
+    if (!error.response) {
+        return true;
+    }
+
+    const status = error.response.status;
+    if (status === undefined) {
+        return false;
+    }
+
+    // Retry only on 429 (rate-limit, transient by definition) and 5xx
+    // (server-side transient failures). 4xx client errors are NOT internal —
+    // they indicate a request the client must change, not a transient fault.
+    return status === 429 || (status >= 500 && status <= 599);
 }
 

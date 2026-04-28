@@ -293,10 +293,13 @@ describe('shouldRetry', () => {
       expect(isInternalError(error)).toBe(true)
     })
 
-    it('returns true for 4xx response status (status is defined, not ECONNABORTED)', () => {
+    it('returns false for 4xx response status (client errors are not internal/transient)', () => {
+      // 4xx errors signal a client-side problem (bad request, auth, validation)
+      // that retries cannot fix. The README explicitly excludes 4xx from the
+      // retry surface, and `isInternalError` mirrors that contract.
       const error = makeAxiosError('GET', 400)
 
-      expect(isInternalError(error)).toBe(true)
+      expect(isInternalError(error)).toBe(false)
     })
 
     it('returns true for 429 response status', () => {

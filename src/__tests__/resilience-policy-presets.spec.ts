@@ -1,6 +1,9 @@
 import type { AxiosError } from 'axios'
 
 import {
+  CONSERVATIVE_TIMEOUT_MS,
+  LOW_QUALITY_TIMEOUT_MS,
+  RESTFULL_TIMEOUT_MS,
   ResilencePresets,
   defaultCircutBreaker,
   resiliencePolicyPresets,
@@ -115,6 +118,14 @@ describe('resilience policy presets', () => {
       expect(preset.bulkhead).toBeUndefined()
       expect(preset.fallback).toBeUndefined()
     })
+
+    it('configures a 60 s pipeline-wide timeout per the README spec', () => {
+      // README "Conservative" section: "Timeout is 60 seconds." This bound
+      // covers the full retry pipeline (including backoff sleeps), so callers
+      // do not need to set a separate axios `timeout`.
+      expect(preset.timeout).toBe(60_000)
+      expect(preset.timeout).toBe(CONSERVATIVE_TIMEOUT_MS)
+    })
   })
 
   describe('resiliencePolicyPresets[RESTFULL]', () => {
@@ -172,6 +183,14 @@ describe('resilience policy presets', () => {
     it('shares the defaultCircutBreaker circuit-breaker config object', () => {
       expect(preset.circuitBreaker).toBe(defaultCircutBreaker)
     })
+
+    it('configures a 10 s pipeline-wide timeout per the README spec', () => {
+      // README "Restfull" section: "Timeout is 10 seconds." Tighter than
+      // CONSERVATIVE because the preset trusts the upstream API to be healthy
+      // and idempotent.
+      expect(preset.timeout).toBe(10_000)
+      expect(preset.timeout).toBe(RESTFULL_TIMEOUT_MS)
+    })
   })
 
   describe('resiliencePolicyPresets[LOW_QUALITY]', () => {
@@ -185,6 +204,14 @@ describe('resilience policy presets', () => {
 
     it('reuses the same defaultCircutBreaker as CONSERVATIVE', () => {
       expect(preset.circuitBreaker).toBe(defaultCircutBreaker)
+    })
+
+    it('configures a 180 s pipeline-wide timeout per the README spec', () => {
+      // README "Low Quality" section: "Timeout is 180 seconds (3 minutes)."
+      // The longest budget — designed for sluggish upstream services that
+      // still occasionally finish.
+      expect(preset.timeout).toBe(180_000)
+      expect(preset.timeout).toBe(LOW_QUALITY_TIMEOUT_MS)
     })
   })
 

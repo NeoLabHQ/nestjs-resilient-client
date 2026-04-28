@@ -4,6 +4,7 @@ import {
   CircuitBreakerPolicy,
   FallbackPolicy,
   RetryPolicy,
+  TimeoutPolicy,
 } from 'cockatiel'
 import type { IDefaultPolicyContext, IPolicy } from 'cockatiel'
 import type { AxiosError, AxiosResponse } from 'axios'
@@ -216,18 +217,25 @@ describe('RestClient', () => {
   })
 
   describe('default preset (constructor with no `config`)', () => {
-    it('builds a policy matching the CONSERVATIVE preset (RetryPolicy with maxAttempts=3 + CircuitBreakerPolicy)', () => {
+    it('builds a policy matching the CONSERVATIVE preset (RetryPolicy maxAttempts=3 wrapping TimeoutPolicy 60s wrapping CircuitBreakerPolicy)', () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
 
-      // CONSERVATIVE = retry + circuitBreaker — `wrap(...)` returns an object
-      // with a `wrapped` field listing the composed sub-policies. Same
-      // inspection trick used by `resilience-policy-builder.spec.ts`.
+      // CONSERVATIVE = retry + timeout + circuitBreaker. Retry sits OUTSIDE
+      // timeout so each attempt receives its own independent 60 s deadline
+      // (per-attempt semantics) — `wrap(...)` returns an object with a
+      // `wrapped` field listing the composed sub-policies in outer-to-inner
+      // order. Same inspection trick used by `resilience-policy-builder.spec.ts`.
       const wrapped = (client.policy as unknown as { wrapped: unknown[] }).wrapped
-      expect(wrapped).toHaveLength(2)
+      expect(wrapped).toHaveLength(3)
       expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
-      expect(wrapped[1]).toBeInstanceOf(CircuitBreakerPolicy)
+      expect(wrapped[1]).toBeInstanceOf(TimeoutPolicy)
+      expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
+
+      // Pin the per-attempt 60 s deadline documented in the README.
+      const timeoutDuration = (wrapped[1] as unknown as { duration: number }).duration
+      expect(timeoutDuration).toBe(60_000)
 
       const retryOptions = (wrapped[0] as unknown as { options: { maxAttempts: number } }).options
       expect(retryOptions.maxAttempts).toBe(3)

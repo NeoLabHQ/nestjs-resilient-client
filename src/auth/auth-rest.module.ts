@@ -4,7 +4,6 @@ import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/i
 
 import { RestClient } from '../client/rest.client'
 import type { ResilanceConfig } from '../client/resilance.config'
-import { ResilencePresets, resiliencePolicyPresets } from '../resilence.policy'
 import { AuthRestClient } from './auth-rest.client'
 import { AuthStrategyService } from './auth-strategy.service'
 import type { AuthConfig } from './auth.config'
@@ -111,7 +110,7 @@ export class AuthRestModule {
     inject?: unknown[]
     imports?: unknown[]
   }): DynamicModule {
-    return {
+    return { // TODO: need import there RestModule if possible, to avoid code duplication related to rest client
       module: AuthRestModule,
       // HttpModule is always imported so the consumer's `useFactory` can
       // `inject: [HttpService]` without re-importing it themselves. Any
