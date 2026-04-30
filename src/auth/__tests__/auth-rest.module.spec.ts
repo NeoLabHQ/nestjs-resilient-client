@@ -14,10 +14,10 @@ import type { AuthConfig, AuthStrategy } from '../auth.config'
 /**
  * Minimal `HttpService`-shaped stub. Mirrors the shape used by
  * `rest.client.spec.ts` — every verb returns an `Observable<AxiosResponse>`
- * so the `@ExecuteWithPolicy` decorator can unwrap it via `firstValueFrom`
- * exactly the same way as the real `HttpService`. Constructor-injected via
- * the {@link AuthRestModule.forRootAsync} factory; we never call
- * `jest.mock('@nestjs/axios')`.
+ * so {@link HookableHttpService.callUnderlying} can unwrap it via
+ * `firstValueFrom` exactly the same way as the real `HttpService`.
+ * Constructor-injected via the {@link AuthRestModule.forRootAsync} factory;
+ * we never call `jest.mock('@nestjs/axios')`.
  */
 type HttpServiceStub = {
   request: jest.Mock

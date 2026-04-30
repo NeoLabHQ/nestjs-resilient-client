@@ -1,115 +1,105 @@
-import type {
-  AxiosRequestConfig,
-  AxiosResponse,
-} from 'axios'
+import { isAxiosError, type AxiosResponse } from 'axios'
 
-import type { RestClient } from '../client/rest.client'
+import { HookableHttpService, type HttpVerb, type InvokeArgs } from '../client/hookable-http.service'
+import { RestClient } from '../client/rest.client'
 import type { AuthStrategyService } from './auth-strategy.service'
-import { Authenticate } from './authenticate.decorator'
 
 /**
  * Authenticated HTTP client. Composes a {@link RestClient} (which owns the
  * resilience policy stack) with an {@link AuthStrategyService} (which owns
- * the authentication lifecycle) and decorates every request method with
- * `@Authenticate` so that:
+ * the authentication lifecycle) and threads each verb through the same
+ * {@link HookableHttpService} surface as {@link RestClient}.
  *
- * 1. `authStrategy.authenticateIfNeeded()` runs before each request.
- * 2. The request config is augmented via `authStrategy.extendRequest(config)`.
- * 3. A single HTTP 401 response triggers `authStrategy.clearAuth()`,
- *    a forced re-authentication, and a single retry of the underlying
- *    {@link RestClient} call.
+ * Lifecycle for every request:
  *
- * Each verb is a thin forwarder to the corresponding {@link RestClient}
- * method. The class intentionally introduces NO new resilience logic — it
- * only layers authentication on top of the existing resilient transport.
+ * 1. {@link AuthStrategyService.authenticateIfNeeded} runs before the call
+ *    (executed by the `onInvoke` hook supplied to the base class).
+ * 2. The request `config` is augmented via
+ *    {@link AuthStrategyService.extendRequest} (also inside `onInvoke`).
+ * 3. The augmented args are forwarded to the wrapped {@link RestClient} verb,
+ *    which itself runs through the resilience pipeline.
+ * 4. On a single HTTP 401 axios error,
+ *    {@link AuthStrategyService.clearAuth} is called, the strategy is
+ *    re-authenticated, and the *original* (pre-`onInvoke`) config is
+ *    re-extended and replayed against the underlying client. This guarantees
+ *    the new credentials replace the stale `Authorization` header from the
+ *    failed attempt rather than being merged on top of it.
  *
  * **NFR — zero `rxjs` and zero `p-retry` imports anywhere in `src/auth/`.**
- * This class does not import either: `rxjs` is consumed inside `RestClient`
- * via the `@ExecuteWithPolicy` decorator, and `p-retry` is no longer used
- * anywhere in the auth layer (the resilience pipeline owns retry semantics).
- *
- * The {@link authStrategy} field is `public readonly` because the
- * `@Authenticate` decorator reads it from the instance at call time via
- * `context.target.authStrategy` (no reflection, no DI metadata).
+ * `rxjs` is consumed inside {@link HookableHttpService} only when the
+ * underlying transport returns an `Observable`; {@link RestClient} returns a
+ * `Promise`, so this client never observes the reactive path. `p-retry` is
+ * not used anywhere in the auth layer — the resilience pipeline owns retry
+ * semantics.
  */
-export class AuthRestClient {
+export class AuthRestClient extends HookableHttpService {
   /**
-   * Public-readable authentication strategy. Required public so the
-   * `@Authenticate` decorator can read it from the instance at invocation
-   * time via `context.target.authStrategy`.
+   * Public-readable authentication strategy. Public because module wiring,
+   * tests, and adapters (e.g. middleware that inspects auth state) read the
+   * cached strategy directly off the client.
    */
   readonly authStrategy: AuthStrategyService
 
-  constructor(
-    private readonly restClient: RestClient,
-    authStrategy: AuthStrategyService,
-  ) {
+  constructor(restClient: RestClient, authStrategy: AuthStrategyService) {
+    super(restClient, {
+      onInvoke: async (args) => {
+        await authStrategy.authenticateIfNeeded()
+        return { ...args, config: authStrategy.extendRequest(args.config) }
+      },
+    })
     this.authStrategy = authStrategy
   }
 
-  // Each verb is a thin forwarder to `this.restClient.<verb>(...)` decorated
-  // with `@Authenticate()`. The same generic signatures as `RestClient` are
-  // used so that the public surface is interchangeable from a caller's
-  // perspective. The `@Authenticate` decorator handles config-arg extension
-  // and 401 retry; this class adds nothing beyond delegation.
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.request<T = any>; switching to `unknown` would force callers to narrow `response.data` and would break API parity with the wrapped RestClient
-  request<T = any>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
-    return this.restClient.request<T>(config)
+  /**
+   * Returns the wrapped {@link RestClient} that owns the resilience policy
+   * stack. Exposed so module wiring (notably the single-source-of-truth
+   * invariant test on {@link AuthRestModule}) and adapters can recover the
+   * exact instance the {@link AuthRestClient} was constructed with — without
+   * widening the {@link HookableHttpService.httpService} field's structural
+   * type.
+   */
+  get restClient(): RestClient {
+    return this.httpService as RestClient
   }
 
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.get<T = any, D = any>; see `request` for rationale
-  get<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.get<T, D>(url, config)
-  }
+  /**
+   * Adds the 401-recovery path on top of the base hook lifecycle. A single
+   * HTTP 401 response triggers:
+   *
+   * 1. {@link AuthStrategyService.clearAuth} to drop the cached strategy.
+   * 2. {@link AuthStrategyService.authenticateIfNeeded} to acquire a fresh
+   *    strategy (single-flight via the underlying `@DeduplicateInflight`).
+   * 3. A re-extension of the *original* (pre-`onInvoke`) `config` so the new
+   *    credentials replace the stale `Authorization` header instead of being
+   *    layered on top of it.
+   * 4. A single replay against the underlying transport via
+   *    {@link HookableHttpService.callUnderlying}, bypassing the `onInvoke`
+   *    hook so authentication is not double-applied. Any error on the replay
+   *    (including a second 401) propagates as-is.
+   *
+   * Non-401 axios errors and non-axios errors propagate untouched so the
+   * resilience pipeline owned by the wrapped {@link RestClient} retains full
+   * control of retry semantics for transient transport failures.
+   */
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    initialArgs: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    try {
+      return await super.dispatch<T>(verb, initialArgs)
+    }
+    catch (error) {
+      if (!isAxiosError(error) || error.response?.status !== 401) {
+        throw error
+      }
 
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.delete<T = any, D = any>; see `request` for rationale
-  delete<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.delete<T, D>(url, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.head<T = any, D = any>; see `request` for rationale
-  head<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.head<T, D>(url, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.post<T = any, D = any>; see `request` for rationale
-  post<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.post<T, D>(url, data, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.put<T = any, D = any>; see `request` for rationale
-  put<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.put<T, D>(url, data, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.patch<T = any, D = any>; see `request` for rationale
-  patch<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.patch<T, D>(url, data, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.postForm<T = any, D = any>; see `request` for rationale
-  postForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.postForm<T, D>(url, data, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.putForm<T = any, D = any>; see `request` for rationale
-  putForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.putForm<T, D>(url, data, config)
-  }
-
-  @Authenticate()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors RestClient.patchForm<T = any, D = any>; see `request` for rationale
-  patchForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.restClient.patchForm<T, D>(url, data, config)
+      this.authStrategy.clearAuth()
+      await this.authStrategy.authenticateIfNeeded()
+      const retryArgs: InvokeArgs = {
+        ...initialArgs,
+        config: this.authStrategy.extendRequest(initialArgs.config),
+      }
+      return await this.callUnderlying<T>(verb, retryArgs)
+    }
   }
 }

@@ -11,7 +11,7 @@ import type { AxiosError, AxiosResponse } from 'axios'
 
 import { RestClient } from '../rest.client'
 import { resiliencePolicyBuilder } from '../resailencePolicyBuilder'
-import { resiliencePolicyPresets, ResilencePresets } from '../../resilence.policy'
+import { ResilencePresets } from '../../resilence.policy'
 import type { ResilanceConfig } from '../resilance.config'
 
 /**
@@ -21,7 +21,7 @@ import type { ResilanceConfig } from '../resilance.config'
  * (which the spec overwrites because the field is `readonly` only in TS).
  *
  * Avoids any `jest.mock` of cockatiel/@nestjs/axios — keeps the test isolated
- * to RestClient verb dispatch + decorator semantics.
+ * to RestClient verb dispatch + hook lifecycle semantics.
  */
 function buildStubPolicy(signal: AbortSignal): IPolicy<IDefaultPolicyContext, unknown> & {
   execute: jest.Mock
@@ -39,8 +39,9 @@ function buildStubPolicy(signal: AbortSignal): IPolicy<IDefaultPolicyContext, un
 
 /**
  * Minimal `HttpService`-shaped stub. Each verb returns the configured
- * `Observable<AxiosResponse>` so the `@ExecuteWithPolicy` decorator can unwrap
- * it via `firstValueFrom` exactly the same way as the real `HttpService`.
+ * `Observable<AxiosResponse>` so the {@link HookableHttpService} dispatcher
+ * can unwrap it via `firstValueFrom` exactly the same way as the real
+ * `HttpService`.
  */
 type HttpServiceStub = {
   request: jest.Mock
@@ -166,23 +167,34 @@ describe('RestClient', () => {
       },
     )
 
-    it('passes verb-specific arguments straight through to the underlying httpService', async () => {
+    it('passes verb-specific arguments straight through to the underlying httpService (config gets a `signal` field merged in)', async () => {
       const stubPolicy = buildStubPolicy(new AbortController().signal)
       const stubHttp = buildHttpServiceStub(successResponse)
       const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
       ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
-      // Two-arg verbs preserve `(url, config)` in order.
+      // Two-arg verbs preserve `(url, config)` in order. RestClient.dispatch
+      // merges `policyCtx.signal` into the config carrier, so the underlying
+      // httpService observes the original headers PLUS a `signal` field.
       await client.get('/items', { headers: { 'x-id': 'g' } })
-      expect(stubHttp.get).toHaveBeenCalledWith('/items', { headers: { 'x-id': 'g' } })
+      expect(stubHttp.get).toHaveBeenCalledWith(
+        '/items',
+        expect.objectContaining({ headers: { 'x-id': 'g' }, signal: expect.any(AbortSignal) }),
+      )
 
-      // Three-arg verbs preserve `(url, data, config)` in order.
+      // Three-arg verbs preserve `(url, data, config)` in order — same signal
+      // injection behaviour as the two-arg shape, just on the config slot
+      // forwarded as the third positional arg.
       await client.post('/items', { id: 1 }, { headers: { 'x-id': 'p' } })
-      expect(stubHttp.post).toHaveBeenCalledWith('/items', { id: 1 }, { headers: { 'x-id': 'p' } })
+      expect(stubHttp.post).toHaveBeenCalledWith(
+        '/items',
+        { id: 1 },
+        expect.objectContaining({ headers: { 'x-id': 'p' }, signal: expect.any(AbortSignal) }),
+      )
     })
   })
 
-  describe('signal forwarding for `request`', () => {
+  describe('signal forwarding (all verbs)', () => {
     it('forwards `policyCtx.signal` into args[0] when calling `request`', async () => {
       const sentinelSignal = new AbortController().signal
       const stubPolicy = buildStubPolicy(sentinelSignal)
@@ -197,22 +209,121 @@ describe('RestClient', () => {
       const [passedConfig] = stubHttp.request.mock.calls[0] as [Record<string, unknown>]
       expect(passedConfig.method).toBe('GET')
       expect(passedConfig.url).toBe('/raw')
-      // Decorator must inject the AbortSignal carried by the policy context.
+      // RestClient.dispatch must merge the AbortSignal carried by the policy
+      // context into the request config.
       expect(passedConfig.signal).toBe(sentinelSignal)
     })
 
-    it('does NOT inject signal into args for non-`request` verbs (e.g. `get`)', async () => {
+    it('forwards `policyCtx.signal` into args[1] for `(url, config?)` verbs (get/delete/head)', async () => {
+      // The signal forwarding behaviour now extends to every verb on
+      // `RestClient` — replacing the prior `request`-only special case. This
+      // pins the new contract at the verb-shape boundary so a regression that
+      // re-narrows signal injection is caught immediately.
+      const sentinelSignal = new AbortController().signal
+
+      for (const verb of ['get', 'delete', 'head'] as const) {
+        const stubPolicy = buildStubPolicy(sentinelSignal)
+        const stubHttp = buildHttpServiceStub(successResponse)
+        const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
+        ;(client as unknown as { policy: unknown }).policy = stubPolicy
+
+        await client[verb]('/users', { headers: { 'x-trace': '1' } })
+
+        const [, passedConfig] = stubHttp[verb].mock.calls[0] as [string, Record<string, unknown>]
+        expect(passedConfig.signal).toBe(sentinelSignal)
+        // Caller-supplied headers are preserved alongside the injected signal.
+        expect(passedConfig.headers).toEqual({ 'x-trace': '1' })
+      }
+    })
+
+    it('forwards `policyCtx.signal` into args[2] for `(url, data, config?)` verbs (post/put/patch/*Form)', async () => {
+      const sentinelSignal = new AbortController().signal
+
+      for (const verb of ['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm'] as const) {
+        const stubPolicy = buildStubPolicy(sentinelSignal)
+        const stubHttp = buildHttpServiceStub(successResponse)
+        const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
+        ;(client as unknown as { policy: unknown }).policy = stubPolicy
+
+        await client[verb]('/items', { id: 1 }, { headers: { 'x-trace': '1' } })
+
+        const [, , passedConfig] = stubHttp[verb].mock.calls[0] as [string, unknown, Record<string, unknown>]
+        expect(passedConfig.signal).toBe(sentinelSignal)
+        expect(passedConfig.headers).toEqual({ 'x-trace': '1' })
+      }
+    })
+
+    it('does NOT mutate the caller-supplied config — signal is added on a copy', async () => {
       const sentinelSignal = new AbortController().signal
       const stubPolicy = buildStubPolicy(sentinelSignal)
       const stubHttp = buildHttpServiceStub(successResponse)
-
       const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
       ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
-      await client.get('/users', { headers: { 'x-trace': '1' } })
+      // Caller-provided config object MUST remain unchanged after the call —
+      // the dispatcher must spread into a fresh object instead of mutating.
+      const callerConfig: Record<string, unknown> = { headers: { 'x-trace': '1' } }
+      await client.get('/users', callerConfig as Parameters<typeof client.get>[1])
 
+      expect(callerConfig).not.toHaveProperty('signal')
       const [, passedConfig] = stubHttp.get.mock.calls[0] as [string, Record<string, unknown>]
-      expect(passedConfig).not.toHaveProperty('signal')
+      expect(passedConfig).not.toBe(callerConfig)
+      expect(passedConfig.signal).toBe(sentinelSignal)
+    })
+
+    it('composes the caller-supplied signal with the policy signal via `AbortSignal.any` so either source can abort', async () => {
+      // When a caller passes their own AbortSignal we must NOT clobber it —
+      // composition keeps both abort sources live: cockatiel's
+      // retry/timeout/circuit-breaker driver AND the caller's external
+      // cancellation. Aborting the user signal must propagate to the merged
+      // signal observed by axios.
+      const policySignal = new AbortController().signal
+      const userController = new AbortController()
+      const stubPolicy = buildStubPolicy(policySignal)
+      const stubHttp = buildHttpServiceStub(successResponse)
+      const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
+      ;(client as unknown as { policy: unknown }).policy = stubPolicy
+
+      await client.get('/users', { signal: userController.signal })
+
+      const [, passedConfig] = stubHttp.get.mock.calls[0] as [string, Record<string, AbortSignal>]
+      const merged = passedConfig.signal
+      expect(merged).not.toBe(policySignal)
+      expect(merged).not.toBe(userController.signal)
+      expect(merged.aborted).toBe(false)
+
+      userController.abort()
+      // The composed signal must observe the user's abort — proves
+      // composition is wired through `AbortSignal.any`.
+      expect(merged.aborted).toBe(true)
+    })
+
+    it('falls back to the policy signal when `AbortSignal.any` is unavailable', async () => {
+      // Defensive runtime check for environments that pre-date `AbortSignal.any`
+      // (Node < 20). The dispatcher must not throw — it must prefer the policy
+      // signal so cockatiel's resilience contract continues to drive aborts.
+      const policySignal = new AbortController().signal
+      const userController = new AbortController()
+      const stubPolicy = buildStubPolicy(policySignal)
+      const stubHttp = buildHttpServiceStub(successResponse)
+      const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
+      ;(client as unknown as { policy: unknown }).policy = stubPolicy
+
+      const originalAny = (AbortSignal as { any?: unknown }).any
+      try {
+        // Deliberately removing the static method simulates the legacy runtime.
+        delete (AbortSignal as { any?: unknown }).any
+
+        await client.get('/users', { signal: userController.signal })
+
+        const [, passedConfig] = stubHttp.get.mock.calls[0] as [string, Record<string, AbortSignal>]
+        // Without `AbortSignal.any` the policy signal wins.
+        expect(passedConfig.signal).toBe(policySignal)
+      }
+      finally {
+        // Restore the static method for the rest of the suite.
+        ;(AbortSignal as { any?: unknown }).any = originalAny
+      }
     })
   })
 
@@ -388,44 +499,58 @@ describe('RestClient', () => {
     const INDEX_TWO_VERBS: IndexTwoVerb[] = ['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm']
 
     it.each(INDEX_ONE_VERBS)(
-      '%s forwards (url, config) and (url) shapes to httpService.%s',
+      '%s forwards (url, config) and (url) shapes to httpService.%s with the policy signal merged in',
       async (verb) => {
         const stubPolicy = buildStubPolicy(new AbortController().signal)
         const stubHttp = buildHttpServiceStub(successResponse)
         const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
         ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
-        // (url, config) shape
+        // (url, config) shape — caller's headers are preserved and the
+        // dispatcher merges `policyCtx.signal` into the same config slot.
         await client[verb]('/with-config', { headers: { 'x-id': 'a' } })
-        expect(stubHttp[verb]).toHaveBeenLastCalledWith('/with-config', { headers: { 'x-id': 'a' } })
+        expect(stubHttp[verb]).toHaveBeenLastCalledWith(
+          '/with-config',
+          expect.objectContaining({ headers: { 'x-id': 'a' }, signal: expect.any(AbortSignal) }),
+        )
 
-        // (url) shape — config omitted; httpService should still receive
-        // exactly two positional arguments with the second left undefined.
+        // (url) shape — config omitted; httpService still receives a config
+        // object containing the injected signal (the slot is materialised by
+        // the dispatcher from the empty default).
         await client[verb]('/no-config')
-        expect(stubHttp[verb]).toHaveBeenLastCalledWith('/no-config', undefined)
+        expect(stubHttp[verb]).toHaveBeenLastCalledWith(
+          '/no-config',
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        )
       },
     )
 
     it.each(INDEX_TWO_VERBS)(
-      '%s forwards (url, data, config) and (url, data) shapes to httpService.%s',
+      '%s forwards (url, data, config) and (url, data) shapes to httpService.%s with the policy signal merged in',
       async (verb) => {
         const stubPolicy = buildStubPolicy(new AbortController().signal)
         const stubHttp = buildHttpServiceStub(successResponse)
         const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
         ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
-        // Three-arg shape preserves all positions in order.
+        // Three-arg shape preserves data and merges the signal into the
+        // caller's config without losing the original headers.
         await client[verb]('/with-config', { id: 1 }, { headers: { 'x-id': 'b' } })
         expect(stubHttp[verb]).toHaveBeenLastCalledWith(
           '/with-config',
           { id: 1 },
-          { headers: { 'x-id': 'b' } },
+          expect.objectContaining({ headers: { 'x-id': 'b' }, signal: expect.any(AbortSignal) }),
         )
 
-        // Two-arg shape — config omitted. httpService receives the third
-        // positional argument as undefined; verbs MUST NOT swallow data.
+        // Two-arg shape — config omitted. httpService receives a synthesised
+        // config object carrying the signal at args[2]; data is NEVER moved
+        // into the config slot.
         await client[verb]('/no-config', { id: 2 })
-        expect(stubHttp[verb]).toHaveBeenLastCalledWith('/no-config', { id: 2 }, undefined)
+        expect(stubHttp[verb]).toHaveBeenLastCalledWith(
+          '/no-config',
+          { id: 2 },
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        )
       },
     )
 
@@ -435,7 +560,7 @@ describe('RestClient', () => {
       const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
       ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
-      // With config — signal is injected by the decorator into args[0].
+      // With config — signal is injected by the dispatcher into args[0].
       await client.request({ url: '/explicit', method: 'GET' })
       const calls = stubHttp.request.mock.calls
       const lastCall = calls[calls.length - 1][0] as Record<string, unknown>
@@ -452,7 +577,7 @@ describe('RestClient', () => {
       ;(client as unknown as { policy: unknown }).policy = stubPolicy
 
       // Caller-provided config object MUST remain unchanged after the call —
-      // the decorator must spread into a fresh object instead of mutating.
+      // the dispatcher must spread into a fresh object instead of mutating.
       const callerConfig: Record<string, unknown> = { url: '/raw' }
       await client.request(callerConfig as Parameters<typeof client.request>[0])
 
@@ -487,13 +612,13 @@ describe('RestClient', () => {
   })
 
   describe('constructor', () => {
-    it('explicit `config = resiliencePolicyPresets.CONSERVATIVE` produces same policy shape as the default', () => {
+    it('explicit `config = ResilencePresets.CONSERVATIVE` produces same policy shape as the default', () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       const defaulted = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
       const explicit = new RestClient(
         stubHttp as unknown as ConstructorParameters<typeof RestClient>[0],
-        resiliencePolicyPresets[ResilencePresets.CONSERVATIVE],
+        ResilencePresets.CONSERVATIVE,
       )
 
       const defaultedWrapped = (defaulted.policy as unknown as { wrapped: object[] }).wrapped

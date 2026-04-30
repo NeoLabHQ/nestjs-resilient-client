@@ -1,124 +1,112 @@
 import type { HttpService } from '@nestjs/axios'
 import { Logger } from '@nestjs/common'
-import type {
-  AxiosInstance,
-  AxiosRequestConfig,
-  AxiosResponse,
-} from 'axios'
+import type { AxiosRequestConfig, AxiosResponse } from 'axios'
 import type {
   IDefaultPolicyContext,
   IPolicy,
 } from 'cockatiel'
 import type { Loggable } from 'nestjs-log-decorator'
 
-import { resiliencePolicyPresets, ResilencePresets } from '../resilence.policy'
-import { ExecuteWithPolicy } from './execute-with-policy.decorator'
+import { ResilencePresets } from '../resilence.policy'
+import { HookableHttpService, type HttpVerb, type InvokeArgs } from './hookable-http.service'
 import { resiliencePolicyBuilder } from './resailencePolicyBuilder'
 import type { ResilanceConfig } from './resilance.config'
+
+/**
+ * Composes the user-supplied `AbortSignal` (if any) with cockatiel's policy
+ * signal so that BOTH abort sources can cancel the in-flight axios request:
+ * cockatiel's retries/timeouts/circuit-breakers, AND any external cancellation
+ * the caller wired into their config.
+ *
+ * Composition uses `AbortSignal.any([userSignal, policySignal])` (Node 20+)
+ * when available. On older runtimes that lack `AbortSignal.any`, the policy
+ * signal is preferred — cockatiel owns the resilience contract and consumers
+ * who pass their own signal explicitly are expected to be on a runtime that
+ * supports composition.
+ *
+ * The user's `AxiosRequestConfig` is treated as immutable: the merge always
+ * produces a NEW object via spread (`{ ...userConfig, signal: ... }`) so retry
+ * paths can re-merge from the original config without seeing the previous
+ * attempt's signal.
+ */
+function mergeSignal(
+  userConfig: AxiosRequestConfig,
+  policySignal: AbortSignal,
+): AxiosRequestConfig {
+  const userSignal = userConfig.signal as AbortSignal | undefined
+
+  if (userSignal === undefined) {
+    return { ...userConfig, signal: policySignal }
+  }
+
+  // `AbortSignal.any` is Node 20+ / modern browsers. The runtime check keeps
+  // the merge defensive against environments without it: in that (vanishingly
+  // rare) case the policy signal wins, since cockatiel's
+  // retry/timeout/circuit-breaker contract is the load-bearing one.
+  const composer = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+  if (typeof composer === 'function') {
+    return { ...userConfig, signal: composer.call(AbortSignal, [userSignal, policySignal]) }
+  }
+
+  return { ...userConfig, signal: policySignal }
+}
 
 /**
  * Resilient HTTP client that wraps `@nestjs/axios`'s `HttpService` and runs
  * every request through a composed cockatiel `IPolicy`.
  *
- * Each verb method delegates to the underlying `HttpService` (which returns an
- * `Observable<AxiosResponse>`); the `@ExecuteWithPolicy` decorator wraps that
- * Observable in `policy.execute` and unwraps it via `firstValueFrom`, so the
- * publicly observable return type is `Promise<AxiosResponse<...>>`.
+ * `RestClient` extends {@link HookableHttpService} for the verb surface and
+ * overrides {@link HookableHttpService.dispatch} to wrap every dispatch in
+ * `policy.execute(...)`. The `signal` from cockatiel's policy context is
+ * forwarded into the verb's `AxiosRequestConfig` slot so retries, timeouts,
+ * and circuit-breakers can cancel in-flight axios requests cooperatively.
  *
- * The `policy` field is public (read-only) because `@ExecuteWithPolicy` reads
- * it from the instance at call time via `context.target.policy`.
+ * The {@link policy} field is `public readonly` so external consumers can
+ * inspect or instrument the composed policy (e.g. for circuit-breaker state
+ * snapshots). The field is initialised once in the constructor — there is no
+ * supported runtime mutation path.
  */
-export class RestClient implements Loggable {
+export class RestClient extends HookableHttpService implements Loggable {
   /** NestJS logger; required by `Loggable` from `nestjs-log-decorator`. */
   readonly logger: Logger = new Logger(RestClient.name)
 
   /**
-   * Composed resilience policy used by `@ExecuteWithPolicy` to wrap every
-   * request. Public so the decorator can read it from the instance via
-   * `context.target.policy` on each invocation. The `any` result-type on
-   * `IPolicy` mirrors the heterogeneous `AxiosResponse<T, D>` shapes that flow
-   * through every verb.
+   * Composed resilience policy used by {@link dispatch} to wrap every
+   * request. The `any` result-type on `IPolicy` mirrors the heterogeneous
+   * `AxiosResponse<T, D>` shapes that flow through every verb.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- IPolicy result type must be `any` because per-verb response shapes vary across calls
   readonly policy: IPolicy<IDefaultPolicyContext, any>
 
   constructor(
-    private readonly httpService: HttpService,
-    config: ResilanceConfig<unknown> = resiliencePolicyPresets[ResilencePresets.CONSERVATIVE],
+    httpService: HttpService,
+    config: ResilanceConfig<unknown> = ResilencePresets.CONSERVATIVE,
   ) {
+    super(httpService)
     this.policy = resiliencePolicyBuilder(config)
   }
 
-  /** Underlying axios instance — exposed for adapter-level interop. */
-  get axiosRef(): AxiosInstance {
-    return this.httpService.axiosRef
-  }
-
-  // Each verb below returns the Observable from `HttpService`; the decorator
-  // unwraps it via `firstValueFrom` and wraps the call in `policy.execute`,
-  // so the *runtime* return value is a `Promise<AxiosResponse<...>>`.
-  // The cast to `Promise<...>` aligns the *declared* type with that runtime
-  // contract (matching the RestClient Contract in the task spec).
-  // The `request` propertyKey is special-cased by the decorator to inject
-  // `policyCtx.signal` into args[0] so axios receives a cancellable signal.
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.request<T = any>; restructuring to `unknown` would force every consumer to narrow `response.data` even when calling without an explicit type arg, breaking API parity with @nestjs/axios
-  request<T = any>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
-    return this.httpService.request<T>(config) as unknown as Promise<AxiosResponse<T>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.get<T = any, D = any>; see `request` for rationale
-  get<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.get<T, D>(url, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.delete<T = any, D = any>; see `request` for rationale
-  delete<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.delete<T, D>(url, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.head<T = any, D = any>; see `request` for rationale
-  head<T = any, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.head<T, D>(url, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.post<T = any, D = any>; see `request` for rationale
-  post<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.post<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.put<T = any, D = any>; see `request` for rationale
-  put<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.put<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.patch<T = any, D = any>; see `request` for rationale
-  patch<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.patch<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.postForm<T = any, D = any>; see `request` for rationale
-  postForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.postForm<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.putForm<T = any, D = any>; see `request` for rationale
-  putForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.putForm<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
-  }
-
-  @ExecuteWithPolicy()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors HttpService.patchForm<T = any, D = any>; see `request` for rationale
-  patchForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
-    return this.httpService.patchForm<T, D>(url, data, config) as unknown as Promise<AxiosResponse<T, D>>
+  /**
+   * Wraps the base hook lifecycle in `policy.execute(...)`. The policy's
+   * `signal` is merged into `args.config` for each (re-)attempt so axios
+   * observes a fresh signal on every retry — cockatiel issues a new context
+   * (and therefore a new signal) per attempt, which is exactly what
+   * cooperative cancellation requires.
+   *
+   * Caller-supplied signals are composed with the policy signal via
+   * `AbortSignal.any` so external cancellation continues to abort the request
+   * alongside cockatiel-driven aborts.
+   */
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    initialArgs: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    return await this.policy.execute(async (policyCtx) => {
+      const argsWithSignal: InvokeArgs = {
+        ...initialArgs,
+        config: mergeSignal(initialArgs.config, policyCtx.signal),
+      }
+      return await super.dispatch<T>(verb, argsWithSignal)
+    }) as AxiosResponse<T>
   }
 }

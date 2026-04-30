@@ -158,8 +158,9 @@ export const buildBulkheadPolicy = (config: BulkheadConfig): BulkheadPolicy => {
 export const buildTimeoutPolicy = (config: number | TimeoutConfig): TimeoutPolicy => {
     // Bare-number form is sugar for "cooperative timeout of N milliseconds".
     // Cooperative is the safe default because axios honours the AbortSignal
-    // forwarded by `@ExecuteWithPolicy`, so the in-flight request short-
-    // circuits cleanly without leaving a dangling promise.
+    // forwarded by `RestClient.dispatch` (the cockatiel policy signal merged
+    // into `args.config`), so the in-flight request short-circuits cleanly
+    // without leaving a dangling promise.
     const normalised: TimeoutConfig = typeof config === 'number'
         ? { duration: config }
         : config;

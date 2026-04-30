@@ -5,7 +5,6 @@ import { ConstantBackoff } from 'cockatiel'
 import {
   RestClient,
   ResilencePresets,
-  resiliencePolicyPresets,
   type ResilanceConfig,
 } from '../src/index'
 
@@ -13,9 +12,9 @@ import {
  * End-to-end coverage for {@link RestClient} against the shared httpbin
  * container started by `tests/e2e-setup.ts`. Exercises the resilience
  * pipeline (CONSERVATIVE preset) over real network calls so that the
- * decorator stack (`@ExecuteWithPolicy`) and the cockatiel policy wrap
- * order are validated against actual `AxiosError` instances rather than
- * fabricated stubs.
+ * `HookableHttpService.dispatch` override on `RestClient` and the cockatiel
+ * policy wrap order are validated against actual `AxiosError` instances
+ * rather than fabricated stubs.
  *
  * Container coordinates flow in via `process.env.TEST_HTTP_BASE_URL` —
  * tests never hard-code hosts or ports.
@@ -57,7 +56,7 @@ describe('RestClient (e2e)', () => {
    * because the assertion is on retry COUNT, not on inter-attempt timing.
    */
   function buildClientWithFastBackoff(): RestClient {
-    const conservative = resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]
+    const conservative = ResilencePresets.CONSERVATIVE
     // The preset's `retry` field is non-optional in CONSERVATIVE, but the
     // type system models it as optional. Guard explicitly so a future
     // preset edit cannot silently drop retries from this test.

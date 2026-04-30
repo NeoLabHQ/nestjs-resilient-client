@@ -4,6 +4,7 @@ import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/i
 
 import { RestClient } from '../client/rest.client'
 import type { ResilanceConfig } from '../client/resilance.config'
+import { RestModule } from '../client/rest.module'
 import { AuthRestClient } from './auth-rest.client'
 import { AuthStrategyService } from './auth-strategy.service'
 import type { AuthConfig } from './auth.config'
@@ -20,9 +21,8 @@ import type { AuthConfig } from './auth.config'
  *   {@link AuthStrategy} when the {@link AuthStrategyService} performs its
  *   handshake (see {@link AuthConfig}).
  * - `resilanceConfig` — optional resilience policy configuration. When
- *   omitted, the module falls back to
- *   `resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]` inside the
- *   {@link RestClient} provider factory (see "AuthRestModule defaults to
+ *   omitted, the module falls back to `ResilencePresets.CONSERVATIVE` inside
+ *   the {@link RestClient} provider factory (see "AuthRestModule defaults to
  *   CONSERVATIVE preset" acceptance criterion).
  */
 export interface AuthRestModuleOptions {
@@ -110,42 +110,48 @@ export class AuthRestModule {
     inject?: unknown[]
     imports?: unknown[]
   }): DynamicModule {
-    return { // TODO: need import there RestModule if possible, to avoid code duplication related to rest client
+    const inject = (options.inject ?? []) as Array<
+      InjectionToken | OptionalFactoryDependency
+    >
+    const userImports = (options.imports ?? []) as NonNullable<DynamicModule['imports']>
+
+    return {
       module: AuthRestModule,
       // HttpModule is always imported so the consumer's `useFactory` can
       // `inject: [HttpService]` without re-importing it themselves. Any
       // additional `imports` from the caller are appended verbatim.
+      // RestModule.forHttpService is imported so RestClient construction
+      // is delegated there — eliminating the duplicate `new RestClient(...)`
+      // call that would otherwise exist in both modules.
       imports: [
         HttpModule,
-        ...((options.imports ?? []) as NonNullable<DynamicModule['imports']>),
+        ...userImports,
+        RestModule.forHttpService({
+          imports: userImports,
+          inject,
+          // Derive httpService and resilanceConfig directly from the
+          // consumer's factory so RestModule does not need to know about
+          // AUTH_MODULE_OPTIONS. The factory is called with the same injected
+          // tokens as the consumer expects, so DI dependencies are resolved
+          // in the correct module scope.
+          useFactory: async (...args: unknown[]) => {
+            const opts = await options.useFactory(...args)
+            return { httpService: opts.httpService, resilanceConfig: opts.resilanceConfig }
+          },
+        }),
       ],
       providers: [
-        // 1. Resolve the consumer's async options first — every other
-        //    provider in this module reads from this token.
+        // 1. Resolve the consumer's async options first — AuthStrategyService
+        //    reads authConfig from this token.
         {
           provide: AUTH_MODULE_OPTIONS,
           useFactory: options.useFactory,
-          inject: (options.inject ?? []) as Array<
-            InjectionToken | OptionalFactoryDependency
-          >,
+          inject,
         },
-        // 2. RestClient: applies the CONSERVATIVE-preset fallback when the
-        //    consumer's options omit `resilanceConfig`. Done inside the
-        //    factory (not at options resolution) so the fallback is
-        //    deterministic regardless of how the consumer constructs the
-        //    options object (omitted vs. explicitly `undefined`).
-        {
-          provide: RestClient,
-          useFactory: (opts: AuthRestModuleOptions): RestClient =>
-            new RestClient(
-              opts.httpService,
-              opts.resilanceConfig,
-            ),
-          inject: [AUTH_MODULE_OPTIONS],
-        },
-        // 3. AuthStrategyService: receives the user's AuthConfig plus the
-        //    resilient RestClient so its auth handshake reuses the same
-        //    resilience policy stack as application calls.
+        // 2. AuthStrategyService: receives the user's AuthConfig plus the
+        //    resilient RestClient (provided by the imported RestModule) so
+        //    its auth handshake reuses the same resilience policy stack as
+        //    application calls.
         {
           provide: AuthStrategyService,
           useFactory: (
@@ -155,7 +161,7 @@ export class AuthRestModule {
             new AuthStrategyService(opts.authConfig, client),
           inject: [AUTH_MODULE_OPTIONS, RestClient],
         },
-        // 4. AuthRestClient: top-level facade composed from the two
+        // 3. AuthRestClient: top-level facade composed from the two
         //    collaborators above.
         {
           provide: AuthRestClient,
@@ -166,10 +172,12 @@ export class AuthRestModule {
           inject: [RestClient, AuthStrategyService],
         },
       ],
-      // Both `AuthRestClient` (the authenticated facade) and `RestClient`
-      // (the underlying resilient transport) are exported so consumers can
-      // inject either depending on whether they need the auth layer.
-      exports: [AuthRestClient, RestClient],
+      // `AuthRestClient` (the authenticated facade) is exported directly.
+      // `RestClient` (the underlying resilient transport) is re-exported by
+      // listing `RestModule` — the module that owns the RestClient provider.
+      // NestJS re-exports all exports of a listed module, so consumers can
+      // inject RestClient from either module without a second instance.
+      exports: [AuthRestClient, RestModule],
     }
   }
 }

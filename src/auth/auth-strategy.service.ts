@@ -22,16 +22,16 @@ const AUTHENTICATE_DEDUP_KEY = "authenticate";
  *   on the private {@link performAuthenticate} method.
  * - Delegates per-request credential injection to the cached strategy via
  *   {@link extendRequest}.
- * - Allows external callers (e.g. the `@Authenticate` decorator on a 401)
+ * - Allows external callers (e.g. the `AuthRestClient` 401-recovery path)
  *   to invalidate the cached strategy via {@link clearAuth}.
  *
  * **`extendRequest` semantics when no auth handle exists:** Returns the input
- * config untouched rather than throwing. Rationale: the `@Authenticate`
- * decorator always calls `authenticateIfNeeded()` immediately before
+ * config untouched rather than throwing. Rationale: `AuthRestClient`'s
+ * `onInvoke` hook always calls `authenticateIfNeeded()` immediately before
  * `extendRequest()`, so a missing handle here can only happen if a caller
  * uses `extendRequest` without first authenticating — in which case the
  * safer behavior is to forward the unmodified config (the underlying
- * request will then 401 on its own and the decorator's retry path will
+ * request will then 401 on its own and the dispatch retry path will
  * recover) rather than throwing a synchronous error that would short-circuit
  * the resilience pipeline.
  */
@@ -113,7 +113,7 @@ export class AuthStrategyService {
     /**
      * Invalidates the cached strategy. After this call, {@link isAuthenticated}
      * returns `false` and the next {@link authenticateIfNeeded} triggers a
-     * fresh handshake. Used by the `@Authenticate` decorator's 401 retry path.
+     * fresh handshake. Used by `AuthRestClient`'s 401 retry path.
      */
     clearAuth(): void {
         this.authResult = null;

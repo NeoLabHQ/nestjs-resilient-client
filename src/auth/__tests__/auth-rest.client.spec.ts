@@ -6,7 +6,7 @@ import { AuthRestClient } from '../auth-rest.client'
 
 /**
  * Verb method names exposed by both {@link RestClient} and {@link AuthRestClient}.
- * Used to drive table-style tests so that a missing `@Authenticate()` on any
+ * Used to drive table-style tests so that a missing auth lifecycle on any
  * individual verb surfaces as a per-verb assertion failure rather than a
  * silent gap in coverage.
  */
@@ -36,7 +36,7 @@ const INDEX_1_VERBS: ReadonlySet<Verb> = new Set([
  *
  * `axios.isAxiosError` checks the truthy `isAxiosError` flag on the error
  * value, so any plain `Error` augmented with that flag and a `response`
- * member behaves identically to a real `AxiosError` for the decorator's
+ * member behaves identically to a real `AxiosError` for the dispatcher's
  * 401 / non-401 branching logic.
  */
 function makeAxiosError(status: number): Error {
@@ -63,7 +63,7 @@ function createRestClientStub(response: AxiosResponse = { data: 'ok' } as AxiosR
   return stub
 }
 
-/** Lightweight typed stub for the auth strategy surface read by `@Authenticate`. */
+/** Lightweight typed stub for the auth strategy surface read by AuthRestClient. */
 interface AuthStrategyStub {
   authenticateIfNeeded: jest.Mock<Promise<void>, []>
   extendRequest: jest.Mock<AxiosRequestConfig, [AxiosRequestConfig]>
@@ -113,8 +113,8 @@ describe('AuthRestClient', () => {
     it('exposes authStrategy as a public-readable field', () => {
       const { client, authStrategy } = buildSut()
 
-      // The `@Authenticate` decorator reads `context.target.authStrategy` at
-      // call time, so the field MUST be public-readable on the instance.
+      // Module wiring and adapters read `client.authStrategy` directly, so
+      // the field MUST be public-readable on the instance.
       expect(client.authStrategy).toBe(authStrategy)
     })
   })
@@ -123,10 +123,10 @@ describe('AuthRestClient', () => {
     it.each(ALL_VERBS)('forwards %s to the underlying RestClient exactly once', async (verb) => {
       const { client, restClient } = buildSut()
 
-      // Each verb is invoked with a config argument at the appropriate index
-      // so that `@Authenticate`'s config-arg lookup succeeds. Verbs at
-      // index 1 use `(url, config)`; verbs at index 2 use `(url, data, config)`;
-      // `request` uses `(config)` and is index-1 per the decorator.
+      // Each verb is invoked with the canonical positional shape that
+      // {@link HookableHttpService} maps to `InvokeArgs`. Verbs at index 1 use
+      // `(url, config)`; verbs at index 2 use `(url, data, config)`;
+      // `request` uses `(config)` directly.
       if (verb === 'request') {
         await (client[verb] as (config: AxiosRequestConfig) => Promise<AxiosResponse>)({ url: '/r' })
       }
@@ -147,7 +147,7 @@ describe('AuthRestClient', () => {
       }
     })
 
-    it.each(ALL_VERBS)('@Authenticate decorates %s — pre-flight authenticateIfNeeded runs before forwarding', async (verb) => {
+    it.each(ALL_VERBS)('onInvoke wires authenticateIfNeeded before forwarding %s', async (verb) => {
       const { client, restClient, authStrategy } = buildSut()
 
       const callOrder: string[] = []
@@ -171,8 +171,8 @@ describe('AuthRestClient', () => {
         )('/x', { payload: 1 })
       }
 
-      // Decoration is verified by observing the pre-flight authenticateIfNeeded
-      // hook firing strictly before the underlying RestClient call.
+      // The hook is verified by observing the pre-flight authenticateIfNeeded
+      // call firing strictly before the underlying RestClient call.
       expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
       expect(callOrder).toEqual(['authenticateIfNeeded', 'forward'])
     })
@@ -184,7 +184,7 @@ describe('AuthRestClient', () => {
 
       await client.get('/x', { headers: { y: 'z' } })
 
-      // The decorator passes the original config through extendRequest…
+      // The onInvoke hook passes the original config through extendRequest…
       expect(authStrategy.extendRequest).toHaveBeenCalledTimes(1)
       expect(authStrategy.extendRequest).toHaveBeenCalledWith({ headers: { y: 'z' } })
 
@@ -202,7 +202,7 @@ describe('AuthRestClient', () => {
       const { client, restClient, authStrategy } = buildSut()
 
       // First call rejects with a 401; second call resolves successfully.
-      // The `@Authenticate` decorator's contract is: catch 401, clearAuth,
+      // The AuthRestClient.dispatch contract is: catch 401, clearAuth,
       // re-authenticate, and retry the underlying method exactly once.
       restClient.get
         .mockRejectedValueOnce(makeAxiosError(401))
@@ -221,7 +221,7 @@ describe('AuthRestClient', () => {
     it('rethrows the 500 and invokes authenticateIfNeeded exactly once (pre-flight only)', async () => {
       const { client, restClient, authStrategy } = buildSut()
 
-      // 500 is non-401, so the decorator must NOT retry and must NOT clearAuth.
+      // 500 is non-401, so the dispatcher must NOT retry and must NOT clearAuth.
       restClient.get.mockRejectedValueOnce(makeAxiosError(500))
 
       await expect(client.get('/x')).rejects.toMatchObject({
@@ -280,7 +280,7 @@ describe('AuthRestClient', () => {
       async (verb) => {
         const { client, restClient, authStrategy } = buildSut()
 
-        // Omitting the `config` arg forces the decorator's `args[idx] ?? {}`
+        // Omitting the `config` arg forces the dispatcher's `args.config ?? {}`
         // fallback to fire — covers the optional-config branch on data verbs.
         await (
           client[verb] as (url: string, data: unknown) => Promise<AxiosResponse>
@@ -315,10 +315,10 @@ describe('AuthRestClient', () => {
       await client.request({ url: '/raw', method: 'GET' })
 
       expect(restClient.request).toHaveBeenCalledTimes(1)
-      // `request` declares its config accessor at index 0, so the decorator
-      // writes the merged config back into args[0]. The underlying RestClient
-      // therefore receives the caller's config plus the strategy's
-      // Authorization header.
+      // `request` carries its config in the first positional slot, so the
+      // dispatcher forwards the merged config straight back to args[0]. The
+      // underlying RestClient therefore receives the caller's config plus the
+      // strategy's Authorization header.
       expect(restClient.request).toHaveBeenCalledWith({
         url: '/raw',
         method: 'GET',

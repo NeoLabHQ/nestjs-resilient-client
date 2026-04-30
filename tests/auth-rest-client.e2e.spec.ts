@@ -12,14 +12,14 @@ import {
 /**
  * End-to-end coverage for {@link AuthRestClient} against the shared
  * httpbin container started by `tests/e2e-setup.ts`. Exercises the
- * decorator stack (`@Authenticate` on top of `@ExecuteWithPolicy`) end
- * to end:
+ * hook stack (`AuthRestClient.onInvoke` running on top of the inner
+ * `RestClient`'s `dispatch` override) end to end:
  * - Pre-flight `authenticateIfNeeded()` runs before every request.
  * - The strategy's `extendRequest()` injects an `Authorization: Bearer X`
  *   header that httpbin echoes back under `.headers.Authorization`.
- * - A real HTTP 401 response (from `/status/401`) drives the decorator's
- *   single-shot re-auth retry path: `clearAuth()` followed by a second
- *   `authenticateIfNeeded()` call.
+ * - A real HTTP 401 response (from `/status/401`) drives the
+ *   `AuthRestClient.dispatch` single-shot re-auth retry path:
+ *   `clearAuth()` followed by a second `authenticateIfNeeded()` call.
  *
  * Container coordinates flow in via `process.env.TEST_HTTP_BASE_URL` —
  * tests never hard-code hosts or ports.

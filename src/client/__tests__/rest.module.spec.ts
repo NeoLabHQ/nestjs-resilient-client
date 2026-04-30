@@ -8,6 +8,7 @@ import { of, throwError } from 'rxjs'
 import type { ResilanceConfig } from '../resilance.config'
 import { RestClient } from '../rest.client'
 import { REST_MODULE_OPTIONS, RestModule } from '../rest.module'
+import type { RestFromHttpServiceOptions } from '../rest.module'
 
 /**
  * Builds an axios-shaped error fixture matching the structure
@@ -43,13 +44,13 @@ const successResponse: AxiosResponse = {
  * `HttpService` provider is overridden with a per-test stub so we never make
  * real network calls and can assert on the verb invocations directly.
  *
- * Spreading `axiosConfig`/`resilanceConfig` only when defined preserves the
+ * Spreading `axios`/`resilanceConfig` only when defined preserves the
  * "factory omits the field" branch in {@link RestModule.forRootAsync} —
  * spreading `undefined` would still set the property and mask the omission.
  */
 async function bootstrap(opts: {
   httpServiceStub: Partial<HttpService>
-  axiosConfig?: { baseURL?: string }
+  axios?: { baseURL?: string }
   resilanceConfig?: ResilanceConfig<unknown>
 }): Promise<{
   moduleRef: TestingModule
@@ -60,7 +61,7 @@ async function bootstrap(opts: {
     imports: [
       RestModule.forRootAsync({
         useFactory: () => ({
-          ...(opts.axiosConfig === undefined ? {} : { axiosConfig: opts.axiosConfig }),
+          ...(opts.axios === undefined ? {} : { axios: opts.axios }),
           ...(opts.resilanceConfig === undefined ? {} : { resilanceConfig: opts.resilanceConfig }),
         }),
       }),
@@ -110,13 +111,13 @@ describe('RestModule.forRootAsync', () => {
 
       const { moduleRef } = await bootstrap({
         httpServiceStub,
-        axiosConfig: { baseURL: 'https://api.example.com' },
+        axios: { baseURL: 'https://api.example.com' },
       })
 
-      const opts = moduleRef.get<{ axiosConfig?: { baseURL?: string } }>(
+      const opts = moduleRef.get<{ axios?: { baseURL?: string } }>(
         REST_MODULE_OPTIONS,
       )
-      expect(opts.axiosConfig).toEqual({ baseURL: 'https://api.example.com' })
+      expect(opts.axios).toEqual({ baseURL: 'https://api.example.com' })
     })
 
     it('the RestClient is composed from the HttpService provided by the internally-registered HttpModule', async () => {
@@ -243,8 +244,8 @@ describe('RestModule.forRootAsync', () => {
     })
   })
 
-  describe('axiosConfig forwarding', () => {
-    it('forwards `axiosConfig` (e.g. baseURL) to the internally-registered HttpModule so the underlying axios instance carries it', async () => {
+  describe('axios forwarding', () => {
+    it('forwards `axios` (e.g. baseURL) to the internally-registered HttpModule so the underlying axios instance carries it', async () => {
       // We do NOT override HttpService here — we want to inspect the real
       // axios instance HttpModule constructed from the factory output. The
       // axios instance carries the `baseURL` on its `defaults` after
@@ -253,7 +254,7 @@ describe('RestModule.forRootAsync', () => {
         imports: [
           RestModule.forRootAsync({
             useFactory: () => ({
-              axiosConfig: { baseURL: 'https://api.example.com' },
+              axios: { baseURL: 'https://api.example.com' },
             }),
           }),
         ],
@@ -263,8 +264,8 @@ describe('RestModule.forRootAsync', () => {
       expect(httpService.axiosRef.defaults.baseURL).toBe('https://api.example.com')
     })
 
-    it('omitting `axiosConfig` falls back to axios defaults (no baseURL set)', async () => {
-      // The `axiosConfig ?? {}` fallback is the load-bearing branch when the
+    it('omitting `axios` falls back to axios defaults (no baseURL set)', async () => {
+      // The `axios ?? {}` fallback is the load-bearing branch when the
       // consumer doesn't supply axios options. axios.create({}) leaves the
       // defaults.baseURL undefined.
       const moduleRef = await Test.createTestingModule({
@@ -312,5 +313,89 @@ describe('RestModule.forRootAsync', () => {
       expect(moduleRef.get(RestClient)).toBeInstanceOf(RestClient)
       expect(factory).toHaveBeenCalled()
     })
+  })
+})
+
+describe('RestModule.forHttpService', () => {
+  /**
+   * Builds a minimal stub for the pre-resolved {@link HttpService}. The stub
+   * mirrors the shape {@link RestClient} needs: a `get` mock so the
+   * {@link HookableHttpService} dispatch path can delegate through it.
+   */
+  function buildHttpServiceStub(response: AxiosResponse): Partial<HttpService> {
+    return {
+      get: jest.fn(() => of(response)),
+      axiosRef: { defaults: {} } as HttpService['axiosRef'],
+    }
+  }
+
+  it('provides a RestClient when inject and imports are omitted (fallback to empty arrays)', async () => {
+    // This exercises the `options.inject ?? []` and `options.imports ?? []`
+    // fallback branches in `forHttpService` — the only uncovered paths when
+    // the method is called exclusively from AuthRestModule (which always
+    // supplies both fields).
+    const httpStub = buildHttpServiceStub(successResponse)
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        RestModule.forHttpService({
+          // No `inject` and no `imports` — both default to `[]` inside the method.
+          useFactory: (): RestFromHttpServiceOptions => ({
+            httpService: httpStub as unknown as HttpService,
+          }),
+        }),
+      ],
+    }).compile()
+
+    expect(moduleRef.get(RestClient)).toBeInstanceOf(RestClient)
+  })
+
+  it('applies the CONSERVATIVE default when resilanceConfig is omitted from the factory result', async () => {
+    const httpStub = buildHttpServiceStub(successResponse)
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        RestModule.forHttpService({
+          useFactory: (): RestFromHttpServiceOptions => ({
+            httpService: httpStub as unknown as HttpService,
+          }),
+        }),
+      ],
+    }).compile()
+
+    const restClient = moduleRef.get(RestClient)
+
+    // CONSERVATIVE preset: retry → timeout(60 s) → circuitBreaker.
+    const wrapped = (restClient.policy as unknown as { wrapped: unknown[] }).wrapped
+    expect(wrapped).toHaveLength(3)
+    expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
+    expect(wrapped[1]).toBeInstanceOf(TimeoutPolicy)
+    expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
+  })
+
+  it('applies a supplied resilanceConfig override instead of the CONSERVATIVE default', async () => {
+    const httpStub = buildHttpServiceStub(successResponse)
+    const override: ResilanceConfig<unknown> = {
+      retry: { maxAttempts: 1, backoff: 0, shouldRetry: () => true },
+    }
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        RestModule.forHttpService({
+          useFactory: (): RestFromHttpServiceOptions => ({
+            httpService: httpStub as unknown as HttpService,
+            resilanceConfig: override,
+          }),
+        }),
+      ],
+    }).compile()
+
+    const restClient = moduleRef.get(RestClient)
+
+    const wrapped = (restClient.policy as unknown as { wrapped: unknown[] }).wrapped
+    expect(wrapped).toHaveLength(1)
+    expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
+    const retryOptions = (wrapped[0] as unknown as { options: { maxAttempts: number } }).options
+    expect(retryOptions.maxAttempts).toBe(1)
   })
 })

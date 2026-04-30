@@ -7,11 +7,25 @@ import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
 
 /**
+ * Minimal options for {@link RestModule.forHttpService} — the caller supplies a
+ * pre-resolved `HttpService` so the sub-module does not need to spin up its own
+ * `HttpModule`. Used by {@link AuthRestModule} to delegate `RestClient` construction
+ * to `RestModule`, eliminating the duplicated `new RestClient(httpService, config)`
+ * call that would otherwise exist in both modules.
+ */
+export interface RestFromHttpServiceOptions {
+  /** Pre-resolved `@nestjs/axios` transport to hand to the constructed {@link RestClient}. */
+  httpService: HttpService
+  /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
+  resilanceConfig?: ResilanceConfig<unknown>
+}
+
+/**
  * Options object resolved by the consumer-supplied async factory passed to
  * {@link RestModule.forRootAsync}. Carries the two collaborating concerns the
  * module needs to wire up the resilient transport stack:
  *
- * - `axiosConfig` — forwarded verbatim to `HttpModule.registerAsync` so the
+ * - `axios` — forwarded verbatim to `HttpModule.registerAsync` so the
  *   underlying `axios` instance is constructed with consumer-supplied
  *   `baseURL`, `timeout`, default `headers`, etc. Omit to pick up the
  *   axios defaults.
@@ -25,7 +39,7 @@ export interface RestModuleOptions {
    * Type alias `HttpModuleOptions` is `AxiosRequestConfig & { global?: boolean }`
    * — exactly what `HttpModule.register({ ... })` accepts.
    */
-  axiosConfig?: HttpModuleOptions
+  axios?: HttpModuleOptions
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
   resilanceConfig?: ResilanceConfig<unknown>
 }
@@ -47,8 +61,8 @@ export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
  *
  * 1. {@link REST_MODULE_OPTIONS} — resolved from the consumer-supplied async
  *    factory; carries optional `axiosConfig` and `resilanceConfig`.
- * 2. `HttpModule` — registered asynchronously with the consumer's `axiosConfig`,
- *    so the underlying axios instance is created exactly once with the
+ * 2. `HttpModule` — registered asynchronously with the consumer's `axios`
+ *    config, so the underlying axios instance is created exactly once with the
  *    configured `baseURL`, `timeout`, default headers, etc.
  * 3. {@link RestClient} — built from the `HttpService` provided by the
  *    internally-registered `HttpModule` and `opts.resilanceConfig`, falling
@@ -64,6 +78,56 @@ export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
  */
 @Module({})
 export class RestModule {
+  /**
+   * Builds a minimal {@link DynamicModule} that provides and exports a single
+   * {@link RestClient} built from a pre-resolved `HttpService`. Unlike
+   * {@link forRootAsync}, this method does **not** register an internal
+   * `HttpModule` — it expects the caller to supply the `HttpService` instance
+   * directly via the `useFactory` return value.
+   *
+   * Intended for modules that already manage their own `HttpService` lifecycle
+   * (for example {@link AuthRestModule}). Both modules call this method so the
+   * `new RestClient(httpService, resilanceConfig)` construction logic lives in
+   * exactly one place.
+   *
+   * `imports` and `inject` from `options` are forwarded into the provider
+   * factory so the caller's dependencies (e.g. `ConfigService`) are available
+   * inside `useFactory`.
+   *
+   * @param options - Async factory descriptor with a `useFactory` that returns {@link RestFromHttpServiceOptions}.
+   * @returns DynamicModule providing and exporting {@link RestClient}.
+   */
+  static forHttpService(options: {
+    useFactory: (
+      ...args: unknown[]
+    ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
+    inject?: unknown[]
+    imports?: unknown[]
+  }): DynamicModule {
+    const inject = (options.inject ?? []) as Array<
+      InjectionToken | OptionalFactoryDependency
+    >
+    const userImports = (options.imports ?? []) as NonNullable<
+      DynamicModule['imports']
+    >
+
+    return {
+      module: RestModule,
+      imports: userImports,
+      providers: [
+        {
+          provide: RestClient,
+          useFactory: async (...args: unknown[]): Promise<RestClient> => {
+            const { httpService, resilanceConfig } = await options.useFactory(...args)
+            return new RestClient(httpService, resilanceConfig)
+          },
+          inject,
+        },
+      ],
+      exports: [RestClient],
+    }
+  }
+
   /**
    * Builds a fully wired {@link DynamicModule} from a consumer-supplied async
    * factory. Mirrors the standard NestJS `forRootAsync` shape: the factory
@@ -101,15 +165,15 @@ export class RestModule {
       module: RestModule,
       imports: [
         // HttpModule.registerAsync is resolved against the consumer's own
-        // factory so the axios instance is built from `opts.axiosConfig`.
+        // factory so the axios instance is built from `opts.axios`.
         // The `?? {}` fallback keeps `HttpModule` happy when the consumer
-        // omits `axiosConfig` entirely (axios.create({}) === axios defaults).
+        // omits `axios` entirely (axios.create({}) === axios defaults).
         HttpModule.registerAsync({
           imports: userImports,
           inject,
           useFactory: async (...args: unknown[]) => {
             const opts = await options.useFactory(...args)
-            return opts.axiosConfig ?? {}
+            return opts.axios ?? {}
           },
         }),
         ...userImports,

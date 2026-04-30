@@ -7,7 +7,8 @@ import type { RestClient } from "../client/rest.client";
  * session is still valid, and how to attach credentials to outgoing requests.
  *
  * Implementations are produced by user-supplied {@link AuthConfig} factories
- * and consumed by `AuthStrategyService` and the `@Authenticate` decorator.
+ * and consumed by `AuthStrategyService` (and, transitively, by the
+ * `onInvoke`/`onReturn` hooks on `AuthRestClient`).
  */
 export interface AuthStrategy {
     /**

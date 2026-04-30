@@ -518,8 +518,9 @@ describe('resiliencePolicyBuilder', () => {
 
     it('defaults to TimeoutStrategy.Cooperative when given a bare-number config', () => {
       // Cooperative is the safe default because axios honours the AbortSignal
-      // forwarded by `@ExecuteWithPolicy` and short-circuits the in-flight
-      // request without leaving an orphaned promise.
+      // forwarded by `RestClient.dispatch` (the cockatiel policy signal merged
+      // into `args.config`) and short-circuits the in-flight request without
+      // leaving an orphaned promise.
       const policy = buildTimeoutPolicy(5_000)
 
       expect(getTimeoutStrategy(policy)).toBe(TimeoutStrategy.Cooperative)
