@@ -8,7 +8,6 @@ Zero-configuration resilience and transient-fault-handling HTTP client that wrap
 - **Composable resilience pipeline** — retry, circuit breaker, bulkhead, and fallback policies can be enabled independently and are wrapped in a single deterministic order.
 - **Pluggable authentication** — `AuthRestModule.forRootAsync` accepts a user-supplied `authenticate` callback that returns an `AuthStrategy` (Bearer, Basic, custom). Single-flight authentication, lazy refresh, and one-shot 401 recovery are built in.
 - **Idempotency-aware retries** — only safe HTTP methods (`GET`, `HEAD`, `OPTIONS` by default) are retried on 5xx / network errors. Cancellations and SSL/cert failures are excluded from retry.
-- **Cockatiel signal forwarding** — the cockatiel policy `signal` is forwarded into axios on the generic `request()` path so retries and circuit breakers can cancel in-flight requests.
 
 ### Resilience Patterns
 
@@ -38,22 +37,18 @@ For requests that do not require authentication, `RestModule.forRootAsync` is th
 
 ```ts
 import { Module } from '@nestjs/common'
-import {
-  RestModule,
-  ResilencePresets,
-  resiliencePolicyPresets,
-} from 'nestjs-http-client'
+import { RestModule, ResilencePresets } from 'nestjs-http-client'
 
 @Module({
   imports: [
     RestModule.forRootAsync({
       useFactory: () => ({
         // Forwarded verbatim to the internally-registered HttpModule.
-        axiosConfig: { // TODO: rename axiosConfig to axios
+        axios: {
           baseURL: 'https://api.example.com',
         },
-        // Optional. Omit for the CONSERVATIVE preset (the documented default).
-        resilanceConfig: resiliencePolicyPresets[ResilencePresets.RESTFULL],
+        // Optional. Default is CONSERVATIVE preset.
+        resilanceConfig: ResilencePresets.RESTFULL,
       }),
     }),
   ],
@@ -87,7 +82,7 @@ RestModule.forRootAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
   useFactory: (config: ConfigService) => ({
-    axiosConfig: { baseURL: config.get('API_BASE_URL') },
+    axios: { baseURL: config.get('API_BASE_URL') },
   }),
 })
 ```
@@ -99,11 +94,7 @@ If you already have an `HttpService` provider (for example shared across multipl
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
 import { Module } from '@nestjs/common'
-import {
-  RestClient,
-  ResilencePresets,
-  resiliencePolicyPresets,
-} from 'nestjs-http-client'
+import { RestClient } from 'nestjs-http-client'
 
 @Module({
   imports: [HttpModule],
@@ -135,35 +126,6 @@ export class CatalogService {
     return response.data
   }
 }
-```
-
-
-### Switching resilience presets
-
-Pass a preset to switch the retry and circuit-breaker policy without writing any configuration:
-
-```ts
-import { HttpModule, HttpService } from '@nestjs/axios'
-import { Module } from '@nestjs/common'
-import {
-  RestClient,
-  ResilencePresets,
-  resiliencePolicyPresets,
-} from 'nestjs-http-client'
-
-@Module({
-  imports: [HttpModule.register({ baseURL: 'https://api.example.com' })],
-  providers: [
-    {
-      provide: RestClient,
-      useFactory: (http: HttpService) =>
-        new RestClient(http, resiliencePolicyPresets[ResilencePresets.RESTFULL]), // TODO: change enum to const object, so it can be used like new RestClient(http, ResilencePresets.RESTFULL)
-      inject: [HttpService],
-    },
-  ],
-  exports: [RestClient],
-})
-export class OrdersModule {}
 ```
 
 ### Building a resilience config from scratch
@@ -199,13 +161,15 @@ const customConfig: ResilanceConfig<unknown> = {
 }
 
 @Module({
-  imports: [HttpModule],
-  providers: [
-    {
-      provide: RestClient,
-      useFactory: (http: HttpService) => new RestClient(http, customConfig),
-      inject: [HttpService],
-    },
+  imports: [
+    RestModule.forRootAsync({
+      useFactory: () => ({
+        axios: {
+          baseURL: 'https://api.example.com',
+        },
+        resilanceConfig: customConfig,
+      }),
+    }),
   ],
   exports: [RestClient],
 })
@@ -308,8 +272,10 @@ export class OrdersService {
 ## Configuration Strategies
 
 The `CONSERVATIVE` preset is the default. Switch presets by passing
-`resiliencePolicyPresets[ResilencePresets.<NAME>]` as `resilanceConfig` to
-`AuthRestModule.forRootAsync` or as the second `RestClient` constructor argument.
+`ResilencePresets.<NAME>` as `resilanceConfig` to `AuthRestModule.forRootAsync`
+or as the second `RestClient` constructor argument — `ResilencePresets` is a
+`const` object whose values are the `ResilanceConfig` payloads themselves, so
+no extra lookup is required.
 
 ### Conservative (default)
 
@@ -344,8 +310,7 @@ Same retry surface as `CONSERVATIVE`; named separately so consumers can extend i
 
 - **401 retry** — `AuthRestClient` retries (amount depends on resilience configuration) after a 401: drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then re-invokes the wrapped `RestClient` method. Non-401 errors are rethrown without touching the cached strategy.
 - **Concurrent authentication** — any number of concurrent authentication attempts result in single real request to authentication service.
-- **Cancellation** — the cockatiel `signal` is forwarded into axios on the generic `request()` path. The per-method helpers (`get`, `post`, ...) do not currently forward the signal; pass cancellation via the `signal` field of the per-request `AxiosRequestConfig` if you need cooperative cancellation on those methods. // TODO: automatically forward the signal for all methods.
-
+- **Cancellation** — the cockatiel and user `signal` is forwarded into axios. So retries, timeouts, and circuit-breakers can cancel in-flight axios calls cooperatively. 
 ## API Reference
 
 ### Classes
@@ -359,14 +324,14 @@ new RestClient(httpService: HttpService, config?: ResilanceConfig<unknown>)
 ```
 
 - `httpService` — the upstream `@nestjs/axios` `HttpService`.
-- `config` — optional resilience configuration; defaults to `resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]`.
+- `config` — optional resilience configuration; defaults to `ResilencePresets.CONSERVATIVE`.
 
 Public methods mirror `HttpService`:
 `request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `postForm`, `putForm`, `patchForm`. Each returns a `Promise<AxiosResponse<...>>`. The `axiosRef` getter exposes the underlying `AxiosInstance` for adapter-level interop.
 
 #### `AuthRestClient`
 
-Authenticated facade over `RestClient`. Composes a `RestClient` (which owns the resilience policy stack) with an `AuthStrategyService` (which owns the authentication lifecycle) and decorates every request method with `@Authenticate`.
+Authenticated facade over `RestClient`. Composes a `RestClient` (which owns the resilience policy stack) with an `AuthStrategyService` (which owns the authentication lifecycle).
 
 ```ts
 new AuthRestClient(restClient: RestClient, authStrategy: AuthStrategyService)
@@ -420,7 +385,7 @@ The factory returns a `RestModuleOptions` object:
 ```ts
 interface RestModuleOptions {
   /** Axios configuration forwarded to the internally-registered `HttpModule`. */
-  axiosConfig?: HttpModuleOptions
+  axios?: HttpModuleOptions
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
   resilanceConfig?: ResilanceConfig<unknown>
 }
@@ -532,56 +497,11 @@ const fullyConfigured: ResilanceConfig<unknown, void, string> = {
 }
 ```
 
-#### `ResilencePresets`
+### Hookable transport surface
 
-Enum of supplied preset names: `CONSERVATIVE`, `RESTFULL`, `LOW_QUALITY`.
+`RestClient` and `AuthRestClient` extend a shared `HookableHttpService` base class that owns the verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `postForm`, `putForm`, `patchForm`) and threads every call through an `onInvoke` / `onReturn` lifecycle. Cross-cutting concerns are layered by either
 
-```ts
-enum ResilencePresets {
-  CONSERVATIVE = 'conservative',
-  RESTFULL = 'restfull',
-  LOW_QUALITY = 'low-quality',
-}
-```
-
-#### `resiliencePolicyPresets`
-
-Lookup table from `ResilencePresets` value to a ready-made `ResilanceConfig`.
-
-```ts
-const resiliencePolicyPresets: Record<ResilencePresets, ResilanceConfig<number, void, number>>
-```
-
-Use as `resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]`.
-
-### Decorators
-
-#### `@ExecuteWithPolicy()`
-
-Method decorator. Runs the decorated request method through `this.policy.execute(...)` and unwraps the resulting Observable to a Promise via `firstValueFrom`. Reads `this.policy` at call time. When `propertyKey === 'request'`, forwards the cockatiel `signal` into the first argument.
-
-Used internally on every `RestClient` verb method; consumers extending `RestClient` may apply it to their own methods.
-
-#### `@Authenticate()`
-
-Method decorator. Wraps a request method with the auth lifecycle:
-
-1. `await this.authStrategy.authenticateIfNeeded()`
-2. Replace the config arg (index 1 for `get`/`delete`/`head`/`options`/`request`; index 2 for `post`/`put`/`patch` and `*Form` variants) with `this.authStrategy.extendRequest(args[idx] ?? {})`.
-3. On a single HTTP 401, drop cached auth, re-authenticate, re-extend the *original* args, and retry once.
-
-Used internally on every `AuthRestClient` verb method.
-
-#### `@DeduplicateInflight(keyBuilder)`
-
-Method decorator. Coalesces concurrent calls that derive the same key into one underlying invocation. Stores in-flight promises in `this.inflightMap: Map<string, Promise<unknown>>` and removes the entry in a `finally` block.
-
-Used internally on `AuthStrategyService.performAuthenticate` with a constant key for single-flight authentication. Available for consumer use anywhere a host class exposes an `inflightMap`.
-
-```ts
-@DeduplicateInflight((id: string) => `user:${id}`)
-async fetchUser(id: string): Promise<User> { /* ... */ }
-```
+// TODO: add HookableHttpService usage example
 
 ## Special Thanks
 
