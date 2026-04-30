@@ -1,34 +1,41 @@
 # NestJS HTTP Client
 
-Zero-configuration resilience and transient-fault-handling HTTP client that wraps the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack.
+Zero-configuration resilience and transient-fault-handling HTTP client that wraps the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack. 
+
+> The `cockatiel` library is great reimplementation of famous [Polly](https://github.com/App-vNext/Polly) library for JS/TS ecosystem, but unfortunatelly it is have overcomplicated API, and lacks default preset that can fullfill most of the services retry needs out of the box. This library doing exactly that. You can simply replace default `@nestjs/axios` `HttpService` with `RestClient` and you will get fully resilient HTTP client out of the box.
 
 ## Features
 
-- **Zero-configuration resilience** — sensible `CONSERVATIVE` preset enabled by default; suitable for the majority of workloads.
+- **Zero-configuration resilience** — pragmatic default resilience preset, suitable for the majority of workloads.
 - **Composable resilience pipeline** — retry, circuit breaker, bulkhead, and fallback policies can be enabled independently and are wrapped in a single deterministic order.
 - **Pluggable authentication** — `AuthRestModule.forRootAsync` accepts a user-supplied `authenticate` callback that returns an `AuthStrategy` (Bearer, Basic, custom). Single-flight authentication, lazy refresh, and one-shot 401 recovery are built in.
 - **Idempotency-aware retries** — only safe HTTP methods (`GET`, `HEAD`, `OPTIONS` by default) are retried on 5xx / network errors. Cancellations and SSL/cert failures are excluded from retry.
+- **Highly customizable** — fine-grained control over each resilience policy.
+- **Promises-based API** — all methods return plain Promises, not Observables. Despite that RXJS is great, people and LLMs much better at writing and reading Promises, rather than Observables.
+- **Easy to use** — All clients implement regular axios interface, so you can use them as a drop-in replacement for `@nestjs/axios` `HttpService`. With only difference, that you not need to add `.toPromise()` or `firstValueFrom()` to get the result.
 
 ### Resilience Patterns
-
 
 The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example Timeout policy. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
 
 Other presets "RESTFULL" and "LOW_QUALITY" trade off retry aggressiveness against the trust you place in the upstream API.
 
+> Presets is based on years of development experience of the authors, rather than theoretical best practices. As a result, they are pragmatic and should work as you need, without need to tweak them for "bad" upstream APIs.
+
 #### Reactive Resilience Patterns
 
 Reactive policies engage *after* a failure response has been received.
 
-- **Retry** — exponential backoff with cockatiel's decorrelated jitter; `shouldRetry` is method- and status-aware via `isRetryableError`.
-- **Circuit Breaker** — sampling, count, or consecutive breakers; configurable half-open recovery window.
+- **Retry** — Retry request on failures. Supports: fine-grained control over retry conditions, static and exponential backoff retries on failures.
+- **Circuit Breaker** — Stop execution for a period of time after a failure threshold has been reached. Supports: conditional, sampling, count, or consecutive breakers. Configurable half-open recovery window. Allow to configure Stop/Wait strategies.
 
 #### Proactive Resilience Patterns
 
 Proactive policies engage *before* a failure to manage load.
 
-- **Bulkhead** — semaphore-based concurrency cap with optional queue.
-- **Fallback** — graceful-degradation value or factory invoked on policy-handled failures.
+- **Bulkhead** — Limits the number of concurrent calls to the service. Supports semaphore-based concurrency cap with optional queue.
+- **Fallback** — Return predefined response on failures. Supports: graceful-degradation value or factory invoked on policy-handled failures fallback.
+- **Timeout** — Cancel request after a certain amount of time. Supports: cooperative and aggressive strategies.
 
 ## Quick Start
 
@@ -86,6 +93,39 @@ RestModule.forRootAsync({
   }),
 })
 ```
+
+## Configuration Strategies
+
+The `CONSERVATIVE` preset is the default. If it is not suitable for you, you can configure resilience pipeline manually, or use one of the following presets:
+
+### Conservative (default)
+
+Reasonable assumptions about an API that mostly follows REST but makes common mistakes.
+
+- Timeout is 60 seconds.
+- `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
+- `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
+- Sampling circuit breaker with 60 seconds half-open recovery. Enabled only if during 1 minute all requests to service failed with 5xx status code.
+
+### Restfull
+
+Trust the upstream API to honour REST idempotency on `PUT` and `DELETE`.
+
+- Timeout is 10 seconds.
+- `GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE` are retried up to 3 times on 5xx and network errors with exponential backoff.
+- `PATCH`, `POST` are NOT retried.
+- Sampling circuit breaker with 60 seconds half-open recovery. Enabled only if during 1 minute all requests to service failed with 5xx status code.
+
+### Low Quality
+
+Almost identical to `CONSERVATIVE` preset, but with longer timeout.
+
+- Timeout is 180 seconds (3 minutes).
+- `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
+- `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
+- Sampling circuit breaker with 60 seconds half-open recovery. Enabled only if during 1 minute all requests to service failed with 5xx status code.
+
+> **Note on timeouts.** Temouts is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it. If you want to fully override them, change the policy timeout.
 
 ### Bare `RestClient` (no auth, manual wiring)
 
@@ -268,43 +308,6 @@ export class OrdersService {
   }
 }
 ```
-
-## Configuration Strategies
-
-The `CONSERVATIVE` preset is the default. Switch presets by passing
-`ResilencePresets.<NAME>` as `resilanceConfig` to `AuthRestModule.forRootAsync`
-or as the second `RestClient` constructor argument — `ResilencePresets` is a
-`const` object whose values are the `ResilanceConfig` payloads themselves, so
-no extra lookup is required.
-
-### Conservative (default)
-
-Reasonable assumptions about an API that mostly follows REST but makes common mistakes.
-
-- Timeout is 60 seconds.
-- `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
-- `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
-- Sampling circuit breaker with 60 s half-open recovery.
-
-### Restfull
-
-Trust the upstream API to honour REST idempotency on `PUT` and `DELETE`.
-
-- Timeout is 10 seconds.
-- `GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE` are retried up to 3 times on 5xx and network errors with exponential backoff.
-- `PATCH`, `POST` are NOT retried.
-- Sampling circuit breaker with 60 s half-open recovery.
-
-### Low Quality
-
-Same retry surface as `CONSERVATIVE`; named separately so consumers can extend it with longer timeouts at the axios layer.
-
-- Timeout is 180 seconds (3 minutes).
-- `GET`, `HEAD`, `OPTIONS` are retried up to 3 times on 5xx and network errors with exponential backoff.
-- `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
-- Sampling circuit breaker with 60 s half-open recovery.
-
-> **Note on timeouts.** Temouts is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it. If you want to fully override them, change the policy timeout.
 
 ## Behaviour notes
 
