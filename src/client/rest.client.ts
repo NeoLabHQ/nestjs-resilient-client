@@ -87,7 +87,7 @@ export class RestClient extends HookableHttpService implements Loggable {
   }
 
   /**
-   * Wraps the base hook lifecycle in `policy.execute(...)`. The policy's
+   * Wraps the base dispatch in `policy.execute(...)`. The policy's
    * `signal` is merged into `args.config` for each (re-)attempt so axios
    * observes a fresh signal on every retry — cockatiel issues a new context
    * (and therefore a new signal) per attempt, which is exactly what

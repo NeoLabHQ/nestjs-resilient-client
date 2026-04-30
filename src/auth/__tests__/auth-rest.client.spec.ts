@@ -147,7 +147,7 @@ describe('AuthRestClient', () => {
       }
     })
 
-    it.each(ALL_VERBS)('onInvoke wires authenticateIfNeeded before forwarding %s', async (verb) => {
+    it.each(ALL_VERBS)('pre-flight authenticate runs before forwarding %s', async (verb) => {
       const { client, restClient, authStrategy } = buildSut()
 
       const callOrder: string[] = []
@@ -184,7 +184,7 @@ describe('AuthRestClient', () => {
 
       await client.get('/x', { headers: { y: 'z' } })
 
-      // The onInvoke hook passes the original config through extendRequest…
+      // The dispatch override passes the original config through extendRequest…
       expect(authStrategy.extendRequest).toHaveBeenCalledTimes(1)
       expect(authStrategy.extendRequest).toHaveBeenCalledWith({ headers: { y: 'z' } })
 

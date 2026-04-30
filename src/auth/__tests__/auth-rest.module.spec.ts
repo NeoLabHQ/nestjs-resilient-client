@@ -109,7 +109,7 @@ const successResponse: AxiosResponse = {
  */
 async function bootstrap(opts: {
   httpService: HttpServiceStub
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
 }): Promise<{
   moduleRef: TestingModule
   authRestClient: AuthRestClient
@@ -122,10 +122,10 @@ async function bootstrap(opts: {
           httpService: opts.httpService as unknown as HttpService,
           authConfig: createAuthConfigStub(),
           // Spreading `undefined` would still set the property; only attach
-          // `resilanceConfig` when the caller explicitly supplied one so the
-          // "factory omits resilanceConfig" branch in `AuthRestModule` is
+          // `resilience` when the caller explicitly supplied one so the
+          // "factory omits resilience" branch in `AuthRestModule` is
           // exercised by the default-preset test.
-          ...(opts.resilanceConfig === undefined ? {} : { resilanceConfig: opts.resilanceConfig }),
+          ...(opts.resilience === undefined ? {} : { resilience: opts.resilience }),
         }),
       }),
     ],
@@ -178,7 +178,7 @@ describe('AuthRestModule.forRootAsync', () => {
     })
   })
 
-  describe('default-preset fallback (factory omits `resilanceConfig`)', () => {
+  describe('default-preset fallback (factory omits `resilience`)', () => {
     it('resolved RestClient.policy is the CONSERVATIVE composition: RetryPolicy(maxAttempts=3) wrapping TimeoutPolicy(60s) wrapping CircuitBreakerPolicy', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
@@ -239,8 +239,8 @@ describe('AuthRestModule.forRootAsync', () => {
     })
   })
 
-  describe('explicit `resilanceConfig` override', () => {
-    it('factory-supplied resilanceConfig replaces the CONSERVATIVE default in the resolved RestClient.policy', async () => {
+  describe('explicit `resilience` override', () => {
+    it('factory-supplied resilience replaces the CONSERVATIVE default in the resolved RestClient.policy', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       // Override with a resilience config that has only retry, no circuit
@@ -257,7 +257,7 @@ describe('AuthRestModule.forRootAsync', () => {
 
       const { restClient } = await bootstrap({
         httpService: stubHttp,
-        resilanceConfig: override,
+        resilience: override,
       })
 
       // Override yields a single wrapped RetryPolicy — distinct from the
@@ -285,7 +285,7 @@ describe('AuthRestModule.forRootAsync', () => {
 
       const { restClient } = await bootstrap({
         httpService: stubHttp,
-        resilanceConfig: override,
+        resilience: override,
       })
 
       await expect(restClient.get('/x')).rejects.toBe(error)

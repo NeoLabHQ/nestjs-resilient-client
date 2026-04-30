@@ -20,7 +20,7 @@ import type { AuthConfig } from './auth.config'
  * - `authConfig` — the user-supplied authentication factory that produces an
  *   {@link AuthStrategy} when the {@link AuthStrategyService} performs its
  *   handshake (see {@link AuthConfig}).
- * - `resilanceConfig` — optional resilience policy configuration. When
+ * - `resilience` — optional resilience policy configuration. When
  *   omitted, the module falls back to `ResilencePresets.CONSERVATIVE` inside
  *   the {@link RestClient} provider factory (see "AuthRestModule defaults to
  *   CONSERVATIVE preset" acceptance criterion).
@@ -31,7 +31,7 @@ export interface AuthRestModuleOptions {
   /** User-supplied authentication factory consumed by {@link AuthStrategyService}. */
   authConfig: AuthConfig
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
 }
 
 /**
@@ -51,10 +51,10 @@ export const AUTH_MODULE_OPTIONS: unique symbol = Symbol('AUTH_MODULE_OPTIONS')
  *
  * 1. {@link AUTH_MODULE_OPTIONS} — resolved from the consumer-supplied async
  *    factory; carries `httpService`, `authConfig`, and optional
- *    `resilanceConfig`.
+ *    `resilience`.
  * 2. {@link RestClient} — built from `opts.httpService` and
- *    `opts.resilanceConfig ?? CONSERVATIVE` so a missing
- *    `resilanceConfig` deterministically yields the documented default
+ *    `opts.resilience ?? CONSERVATIVE` so a missing
+ *    `resilience` deterministically yields the documented default
  *    preset.
  * 3. {@link AuthStrategyService} — built from `opts.authConfig` and the
  *    resolved {@link RestClient} (so auth requests go through the same
@@ -93,7 +93,7 @@ export class AuthRestModule {
    *
    * The default-preset fallback lives inside the {@link RestClient} factory
    * (not at options-resolution time) so consumers explicitly passing
-   * `resilanceConfig: undefined` and consumers omitting the field both
+   * `resilience: undefined` and consumers omitting the field both
    * receive the documented CONSERVATIVE preset.
    *
    * `imports` are spread alongside the always-included `HttpModule` so
@@ -129,14 +129,14 @@ export class AuthRestModule {
         RestModule.forHttpService({
           imports: userImports,
           inject,
-          // Derive httpService and resilanceConfig directly from the
+          // Derive httpService and resilience directly from the
           // consumer's factory so RestModule does not need to know about
           // AUTH_MODULE_OPTIONS. The factory is called with the same injected
           // tokens as the consumer expects, so DI dependencies are resolved
           // in the correct module scope.
           useFactory: async (...args: unknown[]) => {
             const opts = await options.useFactory(...args)
-            return { httpService: opts.httpService, resilanceConfig: opts.resilanceConfig }
+            return { httpService: opts.httpService, resilience: opts.resilience }
           },
         }),
       ],

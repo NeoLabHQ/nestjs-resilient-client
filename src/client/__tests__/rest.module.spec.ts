@@ -44,14 +44,14 @@ const successResponse: AxiosResponse = {
  * `HttpService` provider is overridden with a per-test stub so we never make
  * real network calls and can assert on the verb invocations directly.
  *
- * Spreading `axios`/`resilanceConfig` only when defined preserves the
+ * Spreading `axios`/`resilience` only when defined preserves the
  * "factory omits the field" branch in {@link RestModule.forRootAsync} —
  * spreading `undefined` would still set the property and mask the omission.
  */
 async function bootstrap(opts: {
   httpServiceStub: Partial<HttpService>
   axios?: { baseURL?: string }
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
 }): Promise<{
   moduleRef: TestingModule
   restClient: RestClient
@@ -62,7 +62,7 @@ async function bootstrap(opts: {
       RestModule.forRootAsync({
         useFactory: () => ({
           ...(opts.axios === undefined ? {} : { axios: opts.axios }),
-          ...(opts.resilanceConfig === undefined ? {} : { resilanceConfig: opts.resilanceConfig }),
+          ...(opts.resilience === undefined ? {} : { resilience: opts.resilience }),
         }),
       }),
     ],
@@ -135,7 +135,7 @@ describe('RestModule.forRootAsync', () => {
     })
   })
 
-  describe('default-preset fallback (factory omits `resilanceConfig`)', () => {
+  describe('default-preset fallback (factory omits `resilience`)', () => {
     it('resolved RestClient.policy is the CONSERVATIVE composition: RetryPolicy(maxAttempts=3) wrapping TimeoutPolicy(60s) wrapping CircuitBreakerPolicy', async () => {
       const httpServiceStub = { get: jest.fn(() => of(successResponse)) }
 
@@ -191,8 +191,8 @@ describe('RestModule.forRootAsync', () => {
     })
   })
 
-  describe('explicit `resilanceConfig` override', () => {
-    it('factory-supplied resilanceConfig replaces the CONSERVATIVE default in the resolved RestClient.policy', async () => {
+  describe('explicit `resilience` override', () => {
+    it('factory-supplied resilience replaces the CONSERVATIVE default in the resolved RestClient.policy', async () => {
       const httpServiceStub = { get: jest.fn(() => of(successResponse)) }
 
       // Override with a single-policy retry config so the override is
@@ -208,7 +208,7 @@ describe('RestModule.forRootAsync', () => {
 
       const { restClient } = await bootstrap({
         httpServiceStub,
-        resilanceConfig: override,
+        resilience: override,
       })
 
       const wrapped = (restClient.policy as unknown as { wrapped: unknown[] }).wrapped
@@ -233,7 +233,7 @@ describe('RestModule.forRootAsync', () => {
 
       const { restClient } = await bootstrap({
         httpServiceStub,
-        resilanceConfig: override,
+        resilience: override,
       })
 
       await expect(restClient.get('/x')).rejects.toBe(error)
@@ -350,7 +350,7 @@ describe('RestModule.forHttpService', () => {
     expect(moduleRef.get(RestClient)).toBeInstanceOf(RestClient)
   })
 
-  it('applies the CONSERVATIVE default when resilanceConfig is omitted from the factory result', async () => {
+  it('applies the CONSERVATIVE default when resilience is omitted from the factory result', async () => {
     const httpStub = buildHttpServiceStub(successResponse)
 
     const moduleRef = await Test.createTestingModule({
@@ -373,7 +373,7 @@ describe('RestModule.forHttpService', () => {
     expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
   })
 
-  it('applies a supplied resilanceConfig override instead of the CONSERVATIVE default', async () => {
+  it('applies a supplied resilience override instead of the CONSERVATIVE default', async () => {
     const httpStub = buildHttpServiceStub(successResponse)
     const override: ResilanceConfig<unknown> = {
       retry: { maxAttempts: 1, backoff: 0, shouldRetry: () => true },
@@ -384,7 +384,7 @@ describe('RestModule.forHttpService', () => {
         RestModule.forHttpService({
           useFactory: (): RestFromHttpServiceOptions => ({
             httpService: httpStub as unknown as HttpService,
-            resilanceConfig: override,
+            resilience: override,
           }),
         }),
       ],

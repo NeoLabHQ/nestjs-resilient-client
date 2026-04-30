@@ -17,7 +17,7 @@ export interface RestFromHttpServiceOptions {
   /** Pre-resolved `@nestjs/axios` transport to hand to the constructed {@link RestClient}. */
   httpService: HttpService
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
 }
 
 /**
@@ -29,7 +29,7 @@ export interface RestFromHttpServiceOptions {
  *   underlying `axios` instance is constructed with consumer-supplied
  *   `baseURL`, `timeout`, default `headers`, etc. Omit to pick up the
  *   axios defaults.
- * - `resilanceConfig` — optional resilience policy stack. When omitted, the
+ * - `resilience` — optional resilience policy stack. When omitted, the
  *   module falls back to the CONSERVATIVE preset inside the {@link RestClient}
  *   provider factory (matching the documented {@link RestClient} default).
  */
@@ -41,7 +41,7 @@ export interface RestModuleOptions {
    */
   axios?: HttpModuleOptions
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
 }
 
 /**
@@ -60,12 +60,12 @@ export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
  * stack with a single factory call:
  *
  * 1. {@link REST_MODULE_OPTIONS} — resolved from the consumer-supplied async
- *    factory; carries optional `axiosConfig` and `resilanceConfig`.
+ *    factory; carries optional `axiosConfig` and `resilience`.
  * 2. `HttpModule` — registered asynchronously with the consumer's `axios`
  *    config, so the underlying axios instance is created exactly once with the
  *    configured `baseURL`, `timeout`, default headers, etc.
  * 3. {@link RestClient} — built from the `HttpService` provided by the
- *    internally-registered `HttpModule` and `opts.resilanceConfig`, falling
+ *    internally-registered `HttpModule` and `opts.resilience`, falling
  *    back to the CONSERVATIVE preset when the consumer omits the field.
  *
  * Removes the manual `HttpModule.register({...})` + `useFactory: (http) =>
@@ -87,7 +87,7 @@ export class RestModule {
    *
    * Intended for modules that already manage their own `HttpService` lifecycle
    * (for example {@link AuthRestModule}). Both modules call this method so the
-   * `new RestClient(httpService, resilanceConfig)` construction logic lives in
+   * `new RestClient(httpService, resilience)` construction logic lives in
    * exactly one place.
    *
    * `imports` and `inject` from `options` are forwarded into the provider
@@ -118,8 +118,8 @@ export class RestModule {
         {
           provide: RestClient,
           useFactory: async (...args: unknown[]): Promise<RestClient> => {
-            const { httpService, resilanceConfig } = await options.useFactory(...args)
-            return new RestClient(httpService, resilanceConfig)
+            const { httpService, resilience } = await options.useFactory(...args)
+            return new RestClient(httpService, resilience)
           },
           inject,
         },
@@ -141,7 +141,7 @@ export class RestModule {
    *
    * The default-preset fallback lives inside the {@link RestClient} factory
    * (not at options-resolution time) so consumers explicitly passing
-   * `resilanceConfig: undefined` and consumers omitting the field both
+   * `resilience: undefined` and consumers omitting the field both
    * receive the documented CONSERVATIVE preset.
    *
    * @param options - Async factory descriptor. Matches the NestJS dynamic-module idiom.
@@ -180,7 +180,7 @@ export class RestModule {
       ],
       providers: [
         // 1. Resolve the consumer's async options once — RestClient reads
-        //    `resilanceConfig` from this token. Sharing the factory between
+        //    `resilience` from this token. Sharing the factory between
         //    REST_MODULE_OPTIONS and HttpModule.registerAsync would invoke the
         //    consumer's factory twice; we accept that cost for symmetry with
         //    AuthRestModule and because user factories are expected to be
@@ -199,7 +199,7 @@ export class RestModule {
           useFactory: (
             httpService: HttpService,
             opts: RestModuleOptions,
-          ): RestClient => new RestClient(httpService, opts.resilanceConfig),
+          ): RestClient => new RestClient(httpService, opts.resilience),
           inject: [HttpService, REST_MODULE_OPTIONS],
         },
       ],
