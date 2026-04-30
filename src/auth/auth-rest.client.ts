@@ -10,17 +10,20 @@ import type { AuthStrategyService } from './auth-strategy.service'
  * the authentication lifecycle) and threads each verb through the same
  * {@link HookableHttpService} surface as {@link RestClient}.
  *
- * Lifecycle for every request:
+ * Lifecycle for every request (implemented inline in {@link dispatch}):
  *
- * 1. {@link AuthStrategyService.authenticateIfNeeded} runs before the call
- *    (executed by the `onInvoke` hook supplied to the base class).
+ * 1. {@link AuthStrategyService.authenticateIfNeeded} runs before the call so
+ *    the cached strategy is fresh (single-flight via the underlying
+ *    `@DeduplicateInflight`).
  * 2. The request `config` is augmented via
- *    {@link AuthStrategyService.extendRequest} (also inside `onInvoke`).
- * 3. The augmented args are forwarded to the wrapped {@link RestClient} verb,
- *    which itself runs through the resilience pipeline.
+ *    {@link AuthStrategyService.extendRequest} into a fresh
+ *    {@link InvokeArgs} carrier.
+ * 3. The augmented carrier is forwarded to {@link HookableHttpService.dispatch}
+ *    on the underlying {@link RestClient} verb, which itself runs through the
+ *    resilience pipeline.
  * 4. On a single HTTP 401 axios error,
  *    {@link AuthStrategyService.clearAuth} is called, the strategy is
- *    re-authenticated, and the *original* (pre-`onInvoke`) config is
+ *    re-authenticated, and the *original* (pre-extension) config is
  *    re-extended and replayed against the underlying client. This guarantees
  *    the new credentials replace the stale `Authorization` header from the
  *    failed attempt rather than being merged on top of it.
@@ -41,12 +44,7 @@ export class AuthRestClient extends HookableHttpService {
   readonly authStrategy: AuthStrategyService
 
   constructor(restClient: RestClient, authStrategy: AuthStrategyService) {
-    super(restClient, {
-      onInvoke: async (args) => {
-        await authStrategy.authenticateIfNeeded()
-        return { ...args, config: authStrategy.extendRequest(args.config) }
-      },
-    })
+    super(restClient)
     this.authStrategy = authStrategy
   }
 
@@ -63,18 +61,28 @@ export class AuthRestClient extends HookableHttpService {
   }
 
   /**
-   * Adds the 401-recovery path on top of the base hook lifecycle. A single
-   * HTTP 401 response triggers:
+   * Runs the auth lifecycle inline around the base dispatch:
    *
-   * 1. {@link AuthStrategyService.clearAuth} to drop the cached strategy.
-   * 2. {@link AuthStrategyService.authenticateIfNeeded} to acquire a fresh
+   * 1. Pre-flight {@link AuthStrategyService.authenticateIfNeeded} so the
+   *    cached strategy is valid before the request is built.
+   * 2. Re-extend the caller's config via
+   *    {@link AuthStrategyService.extendRequest} into a fresh carrier — the
+   *    original {@link InvokeArgs} is treated as immutable so the 401 retry
+   *    path can re-extend the same pristine config.
+   * 3. Delegate to {@link HookableHttpService.dispatch} on the augmented
+   *    carrier, which forwards to the underlying {@link RestClient} verb.
+   *
+   * On a single HTTP 401 response:
+   *
+   * 1. {@link AuthStrategyService.clearAuth} drops the cached strategy.
+   * 2. {@link AuthStrategyService.authenticateIfNeeded} acquires a fresh
    *    strategy (single-flight via the underlying `@DeduplicateInflight`).
-   * 3. A re-extension of the *original* (pre-`onInvoke`) `config` so the new
-   *    credentials replace the stale `Authorization` header instead of being
-   *    layered on top of it.
+   * 3. The *original* (pre-extension) `initialArgs.config` is re-extended so
+   *    the new credentials replace the stale `Authorization` header instead
+   *    of being layered on top of it.
    * 4. A single replay against the underlying transport via
-   *    {@link HookableHttpService.callUnderlying}, bypassing the `onInvoke`
-   *    hook so authentication is not double-applied. Any error on the replay
+   *    {@link HookableHttpService.callUnderlying}, bypassing the auth pre-flight
+   *    so authentication is not double-applied. Any error on the replay
    *    (including a second 401) propagates as-is.
    *
    * Non-401 axios errors and non-axios errors propagate untouched so the
@@ -86,7 +94,12 @@ export class AuthRestClient extends HookableHttpService {
     initialArgs: InvokeArgs,
   ): Promise<AxiosResponse<T>> {
     try {
-      return await super.dispatch<T>(verb, initialArgs)
+      await this.authStrategy.authenticateIfNeeded()
+      const authedArgs: InvokeArgs = {
+        ...initialArgs,
+        config: this.authStrategy.extendRequest(initialArgs.config),
+      }
+      return await super.dispatch<T>(verb, authedArgs)
     }
     catch (error) {
       if (!isAxiosError(error) || error.response?.status !== 401) {

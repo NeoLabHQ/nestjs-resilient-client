@@ -6,9 +6,6 @@ export { AuthRestClient } from './auth/auth-rest.client'
 export { AuthStrategyService } from './auth/auth-strategy.service'
 export { AuthRestModule } from './auth/auth-rest.module'
 
-// Decorators
-export { DeduplicateInflight } from './deduplicate-inflight.decorator'
-
 // Resilience presets — enum carries runtime + type sides, so re-exported as a value
 export { ResilencePresets, resiliencePolicyPresets } from './resilence.policy'
 
@@ -17,11 +14,9 @@ export type { AuthConfig, AuthStrategy } from './auth/auth.config'
 
 // Type-only exports — hook surface
 export type {
-  HooksConfig,
   HttpServiceLike,
   HttpVerb,
   InvokeArgs,
-  ReturnArgs,
 } from './client/hookable-http.service'
 
 // Type-only exports — resilience configuration surface

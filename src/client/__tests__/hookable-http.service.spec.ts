@@ -3,19 +3,53 @@ import { of } from 'rxjs'
 
 import {
   HookableHttpService,
-  type HooksConfig,
   type HttpServiceLike,
+  type HttpVerb,
   type InvokeArgs,
-  type ReturnArgs,
 } from '../hookable-http.service'
 
 /**
  * Concrete subclass of the abstract {@link HookableHttpService} so the spec
- * can exercise the protected `dispatch` lifecycle through the public verb
- * surface. The class adds no behaviour — every public verb defers to the
+ * can exercise the protected `dispatch` template method through the public
+ * verb surface. The class adds no behaviour — every public verb defers to the
  * inherited template method.
  */
 class ConcreteHookable extends HookableHttpService {}
+
+/**
+ * Subclass that exposes the protected {@link HookableHttpService.dispatch}
+ * and {@link HookableHttpService.callUnderlying} methods so tests can assert
+ * on the template-method override pattern (subclasses pre/post-process the
+ * carrier and either delegate to `super.dispatch` or call `callUnderlying`
+ * directly to bypass any sibling override).
+ */
+class DispatchOverrideHookable extends HookableHttpService {
+  /** Captures the args the override observed before forwarding. */
+  observedArgs: InvokeArgs | undefined
+
+  /**
+   * Mutates the carrier (replaces the config) and forwards via
+   * {@link HookableHttpService.dispatch}. The base `dispatch` simply calls
+   * {@link HookableHttpService.callUnderlying}, so this override proves a
+   * subclass can rewrite the carrier and still reach the transport.
+   */
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    initialArgs: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    this.observedArgs = initialArgs
+    const next: InvokeArgs = {
+      ...initialArgs,
+      config: { headers: { 'x-overridden': 'yes' } },
+    }
+    return super.dispatch<T>(verb, next)
+  }
+
+  /** Test-only escape hatch to invoke the protected callUnderlying directly. */
+  invokeUnderlying<T = unknown>(verb: HttpVerb, args: InvokeArgs): Promise<AxiosResponse<T>> {
+    return this.callUnderlying<T>(verb, args)
+  }
+}
 
 /**
  * Minimal `HttpService`-shaped stub. Each verb returns the configured value
@@ -61,73 +95,8 @@ const successResponse: AxiosResponse = {
 }
 
 describe('HookableHttpService', () => {
-  describe('dispatch lifecycle', () => {
-    it('runs onInvoke before the underlying transport call and onReturn after', async () => {
-      const callOrder: string[] = []
-      const stubHttp = buildHttpServiceStub(successResponse)
-      stubHttp.get.mockImplementation(async () => {
-        callOrder.push('underlying')
-        return successResponse
-      })
-
-      const hooks: HooksConfig = {
-        onInvoke: (args) => {
-          callOrder.push('onInvoke')
-          return args
-        },
-        onReturn: (args) => {
-          callOrder.push('onReturn')
-          return args
-        },
-      }
-
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
-      await client.get('/x')
-
-      // onInvoke MUST run before the call, onReturn MUST run after it.
-      expect(callOrder).toEqual(['onInvoke', 'underlying', 'onReturn'])
-    })
-
-    it('forwards onInvoke-modified args to the underlying transport (config substitution)', async () => {
-      const stubHttp = buildHttpServiceStub(successResponse)
-      const hooks: HooksConfig = {
-        onInvoke: (args) => ({
-          ...args,
-          // Replace the entire config so the underlying transport receives
-          // the hook's substitution rather than the caller's original.
-          config: { headers: { 'x-injected': 'yes' } },
-        }),
-      }
-
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
-      await client.get('/x', { headers: { 'x-original': 'caller' } })
-
-      expect(stubHttp.get).toHaveBeenCalledWith(
-        '/x',
-        { headers: { 'x-injected': 'yes' } },
-      )
-    })
-
-    it('substitutes the response when onReturn returns a different response field', async () => {
-      const substituted: AxiosResponse = {
-        data: { fallback: true },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config: {} as AxiosResponse['config'],
-      }
-      const stubHttp = buildHttpServiceStub(successResponse)
-      const hooks: HooksConfig = {
-        onReturn: (args) => ({ ...args, response: substituted }),
-      }
-
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
-      const result = await client.get('/x')
-
-      expect(result).toBe(substituted)
-    })
-
-    it('treats hooks as optional — dispatching without hooks delegates straight through to the transport', async () => {
+  describe('default dispatch lifecycle', () => {
+    it('delegates straight to the underlying transport without modifying the carrier', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
       const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
@@ -137,102 +106,100 @@ describe('HookableHttpService', () => {
       expect(stubHttp.get).toHaveBeenCalledWith('/x', { headers: { 'x-original': 'caller' } })
     })
 
-    it('awaits async onInvoke / onReturn hooks before continuing the lifecycle', async () => {
+    it('returns the response produced by the underlying transport unchanged', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
-      const seen: string[] = []
+      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
-      const hooks: HooksConfig = {
-        onInvoke: async (args) => {
-          await Promise.resolve()
-          seen.push('async-onInvoke')
-          return args
-        },
-        onReturn: async (args) => {
-          await Promise.resolve()
-          seen.push('async-onReturn')
-          return args
-        },
-      }
+      const result = await client.post('/items', { id: 1 })
 
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
-      await client.get('/x')
-
-      // Both hooks observed (proves the dispatcher awaits async results) and
-      // ordered correctly across the underlying call.
-      expect(seen).toEqual(['async-onInvoke', 'async-onReturn'])
+      // The base dispatch is a pass-through, so the response identity from the
+      // underlying transport must surface untouched at the public verb.
+      expect(result).toBe(successResponse)
     })
   })
 
   describe('verb argument shapes', () => {
     it('request forwards `{ config }` to httpService.request without url/data slots', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
-      let captured: InvokeArgs | undefined
-      const hooks: HooksConfig = {
-        onInvoke: (args) => {
-          captured = args
-          return args
-        },
-      }
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
+      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
       await client.request({ url: '/raw', method: 'GET' })
 
-      expect(captured).toEqual({ config: { url: '/raw', method: 'GET' } })
       expect(stubHttp.request).toHaveBeenCalledWith({ url: '/raw', method: 'GET' })
     })
 
     it('(url, config?) verbs (get/delete/head) carry `url` and a defaulted `config` of `{}` when omitted', async () => {
       for (const verb of ['get', 'delete', 'head'] as const) {
         const stubHttp = buildHttpServiceStub(successResponse)
-        let captured: InvokeArgs | undefined
-        const hooks: HooksConfig = {
-          onInvoke: (args) => {
-            captured = args
-            return args
-          },
-        }
-        const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
+        const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
         await client[verb]('/users')
 
-        // Omitted config defaults to `{}` so the hook always observes a
+        // Omitted config defaults to `{}` so the carrier always observes a
         // non-undefined slot — required by the 401 retry path on
         // AuthRestClient that re-extends `args.config`.
-        expect(captured).toEqual({ url: '/users', config: {} })
+        expect(stubHttp[verb]).toHaveBeenCalledWith('/users', {})
       }
     })
 
     it('(url, data?, config?) verbs (post/put/patch/*Form) carry `url`, `data`, and a defaulted `config` of `{}`', async () => {
       for (const verb of ['post', 'put', 'patch', 'postForm', 'putForm', 'patchForm'] as const) {
         const stubHttp = buildHttpServiceStub(successResponse)
-        let captured: InvokeArgs | undefined
-        const hooks: HooksConfig = {
-          onInvoke: (args) => {
-            captured = args
-            return args
-          },
-        }
-        const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
+        const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
         await client[verb]('/items', { id: 7 })
 
-        expect(captured).toEqual({ url: '/items', data: { id: 7 }, config: {} })
+        expect(stubHttp[verb]).toHaveBeenCalledWith('/items', { id: 7 }, {})
       }
     })
 
-    it('forwards onInvoke-modified url and data slots to the underlying transport', async () => {
+    it('forwards explicit url, data, and config slots to the underlying transport', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
-      const hooks: HooksConfig = {
-        onInvoke: (args) => ({ ...args, url: '/rewritten', data: { rewritten: true } }),
-      }
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
+      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
-      await client.post('/original', { id: 1 })
+      await client.post('/items', { id: 1 }, { headers: { 'x-trace': 't' } })
 
-      // The dispatcher reads the verb-specific positional args from the
-      // (possibly mutated) carrier, so onInvoke can rewrite url and data —
-      // not just config.
-      expect(stubHttp.post).toHaveBeenCalledWith('/rewritten', { rewritten: true }, {})
+      expect(stubHttp.post).toHaveBeenCalledWith(
+        '/items',
+        { id: 1 },
+        { headers: { 'x-trace': 't' } },
+      )
+    })
+  })
+
+  describe('dispatch override (template-method extension point)', () => {
+    it('lets a subclass observe the original carrier and rewrite it before reaching the transport', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+      const client = new DispatchOverrideHookable(stubHttp as unknown as HttpServiceLike)
+
+      await client.get('/x', { headers: { 'x-original': 'caller' } })
+
+      // The override saw the verb's pristine carrier…
+      expect(client.observedArgs).toEqual({
+        url: '/x',
+        config: { headers: { 'x-original': 'caller' } },
+      })
+      // …and the transport received the override's substitution.
+      expect(stubHttp.get).toHaveBeenCalledWith('/x', { headers: { 'x-overridden': 'yes' } })
+    })
+
+    it('exposes callUnderlying as a protected escape hatch that bypasses dispatch overrides', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+      const client = new DispatchOverrideHookable(stubHttp as unknown as HttpServiceLike)
+
+      // Calling `callUnderlying` directly skips the `dispatch` override — the
+      // observed-args hook never fires, and the transport receives the
+      // explicit carrier the caller provides. This is the contract relied on
+      // by AuthRestClient's 401 retry path (replay without re-running auth
+      // pre-flight).
+      const result = await client.invokeUnderlying('get', {
+        url: '/x',
+        config: { headers: { 'x-direct': 'yes' } },
+      })
+
+      expect(result).toBe(successResponse)
+      expect(client.observedArgs).toBeUndefined()
+      expect(stubHttp.get).toHaveBeenCalledWith('/x', { headers: { 'x-direct': 'yes' } })
     })
   })
 
@@ -268,29 +235,6 @@ describe('HookableHttpService', () => {
       const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
 
       expect(client.axiosRef).toBe(stubHttp.axiosRef)
-    })
-  })
-
-  describe('return type carrier', () => {
-    it('passes the full ReturnArgs carrier (config/url/data/response) to onReturn', async () => {
-      const stubHttp = buildHttpServiceStub(successResponse)
-      let returnArgs: ReturnArgs | undefined
-      const hooks: HooksConfig = {
-        onReturn: (args) => {
-          returnArgs = args
-          return args
-        },
-      }
-      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike, hooks)
-
-      await client.post('/items', { id: 1 }, { headers: { 'x-trace': 't' } })
-
-      expect(returnArgs).toEqual({
-        url: '/items',
-        data: { id: 1 },
-        config: { headers: { 'x-trace': 't' } },
-        response: successResponse,
-      })
     })
   })
 })

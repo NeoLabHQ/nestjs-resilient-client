@@ -27,10 +27,10 @@ const AUTHENTICATE_DEDUP_KEY = "authenticate";
  *
  * **`extendRequest` semantics when no auth handle exists:** Returns the input
  * config untouched rather than throwing. Rationale: `AuthRestClient`'s
- * `onInvoke` hook always calls `authenticateIfNeeded()` immediately before
- * `extendRequest()`, so a missing handle here can only happen if a caller
- * uses `extendRequest` without first authenticating — in which case the
- * safer behavior is to forward the unmodified config (the underlying
+ * inline dispatch logic always calls `authenticateIfNeeded()` immediately
+ * before `extendRequest()`, so a missing handle here can only happen if a
+ * caller uses `extendRequest` without first authenticating — in which case
+ * the safer behavior is to forward the unmodified config (the underlying
  * request will then 401 on its own and the dispatch retry path will
  * recover) rather than throwing a synchronous error that would short-circuit
  * the resilience pipeline.

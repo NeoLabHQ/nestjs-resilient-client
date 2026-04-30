@@ -8,7 +8,7 @@ import type { RestClient } from "../client/rest.client";
  *
  * Implementations are produced by user-supplied {@link AuthConfig} factories
  * and consumed by `AuthStrategyService` (and, transitively, by the
- * `onInvoke`/`onReturn` hooks on `AuthRestClient`).
+ * dispatch override on `AuthRestClient`).
  */
 export interface AuthStrategy {
     /**

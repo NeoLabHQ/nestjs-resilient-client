@@ -12,7 +12,7 @@ Zero-configuration resilience and transient-fault-handling HTTP client that wrap
 ### Resilience Patterns
 
 
-The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example Timeout policy. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
+The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example Timeout policy. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTful API, in reality they usually not. This default strategy is called "Conservative".
 
 Other presets "RESTFULL" and "LOW_QUALITY" trade off retry aggressiveness against the trust you place in the upstream API.
 
@@ -33,7 +33,7 @@ Proactive policies engage *before* a failure to manage load.
 ## Quick Start
 
 
-For requests that do not require authentication, `RestModule.forRootAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilanceConfig` is omitted, the `CONSERVATIVE` preset is applied.
+For requests that do not require authentication, `RestModule.forRootAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilience` is omitted, the `CONSERVATIVE` preset is applied.
 
 ```ts
 import { Module } from '@nestjs/common'
@@ -48,7 +48,7 @@ import { RestModule, ResilencePresets } from 'nestjs-http-client'
           baseURL: 'https://api.example.com',
         },
         // Optional. Default is CONSERVATIVE preset.
-        resilanceConfig: ResilencePresets.RESTFULL,
+        resilience: ResilencePresets.RESTFULL,
       }),
     }),
   ],
@@ -167,7 +167,7 @@ const customConfig: ResilanceConfig<unknown> = {
         axios: {
           baseURL: 'https://api.example.com',
         },
-        resilanceConfig: customConfig,
+        resilience: customConfig,
       }),
     }),
   ],
@@ -178,7 +178,7 @@ export class DataModule {}
 
 ### Authenticated client — Bearer token
 
-`AuthRestModule.forRootAsync` accepts a factory that returns the runtime collaborators (`httpService`, `authConfig`, optional `resilanceConfig`). The `authConfig.authenticate(client)` callback receives a fully resilient `RestClient` and must resolve to an `AuthStrategy`.
+`AuthRestModule.forRootAsync` accepts a factory that returns the runtime collaborators (`httpService`, `authConfig`, optional `resilience`). The `authConfig.authenticate(client)` callback receives a fully resilient `RestClient` and must resolve to an `AuthStrategy`.
 
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
@@ -272,10 +272,10 @@ export class OrdersService {
 ## Configuration Strategies
 
 The `CONSERVATIVE` preset is the default. Switch presets by passing
-`ResilencePresets.<NAME>` as `resilanceConfig` to `AuthRestModule.forRootAsync`
-or as the second `RestClient` constructor argument — `ResilencePresets` is a
-`const` object whose values are the `ResilanceConfig` payloads themselves, so
-no extra lookup is required.
+`ResilencePresets.<NAME>` as `resilience` to `RestModule.forRootAsync` /
+`AuthRestModule.forRootAsync`, or as the second `RestClient` constructor
+argument — `ResilencePresets` is a `const` object whose values are the
+`ResilanceConfig` payloads themselves, so no extra lookup is required.
 
 ### Conservative (default)
 
@@ -286,7 +286,7 @@ Reasonable assumptions about an API that mostly follows REST but makes common mi
 - `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
 
-### Restfull
+### RESTful
 
 Trust the upstream API to honour REST idempotency on `PUT` and `DELETE`.
 
@@ -304,11 +304,11 @@ Same retry surface as `CONSERVATIVE`; named separately so consumers can extend i
 - `PUT`, `DELETE`, `PATCH`, `POST` are NOT retried.
 - Sampling circuit breaker with 60 s half-open recovery.
 
-> **Note on timeouts.** Temouts is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it. If you want to fully override them, change the policy timeout.
+> **Note on timeouts.** Timeouts is set at policy level, rather at axios level. As a result, axios timeout can override the policy timeout,  but cannot exceed it. If you want to fully override them, change the policy timeout.
 
 ## Behaviour notes
 
-- **401 retry** — `AuthRestClient` retries (amount depends on resilience configuration) after a 401: drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then re-invokes the wrapped `RestClient` method. Non-401 errors are rethrown without touching the cached strategy.
+- **401 retry** — on a single HTTP 401, `AuthRestClient` drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then replays the call exactly once against the underlying transport (which itself runs through the resilience pipeline). A second 401 — or any non-401 error — is rethrown without touching the cached strategy.
 - **Concurrent authentication** — any number of concurrent authentication attempts result in single real request to authentication service.
 - **Cancellation** — the cockatiel and user `signal` is forwarded into axios. So retries, timeouts, and circuit-breakers can cancel in-flight axios calls cooperatively. 
 ## API Reference
@@ -387,11 +387,43 @@ interface RestModuleOptions {
   /** Axios configuration forwarded to the internally-registered `HttpModule`. */
   axios?: HttpModuleOptions
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
-  resilanceConfig?: ResilanceConfig<unknown>
+  resilience?: ResilanceConfig<unknown>
+}
+```
+
+`AuthRestModule.forRootAsync` accepts a parallel `AuthRestModuleOptions` shape:
+
+```ts
+interface AuthRestModuleOptions {
+  /** Upstream `@nestjs/axios` HTTP transport used by the constructed `RestClient`. */
+  httpService: HttpService
+  /** User-supplied authentication factory consumed by `AuthStrategyService`. */
+  authConfig: AuthConfig
+  /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
+  resilience?: ResilanceConfig<unknown>
 }
 ```
 
 `HttpModule` is registered asynchronously inside the module, so consumers do not need to import it themselves. The `inject` and `imports` keys are forwarded to the internal `HttpModule.registerAsync` call, so the factory can depend on any provider exported from `imports` (e.g. `ConfigService`).
+
+`RestModule` also exposes a lower-level delegation hook for advanced consumers that already manage their own `HttpService` lifecycle:
+
+```ts
+RestModule.forHttpService(options: {
+  useFactory: (...args: unknown[]) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
+  inject?: unknown[]
+  imports?: unknown[]
+}): DynamicModule
+
+interface RestFromHttpServiceOptions {
+  /** Pre-resolved `@nestjs/axios` transport handed to the constructed `RestClient`. */
+  httpService: HttpService
+  /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
+  resilience?: ResilanceConfig<unknown>
+}
+```
+
+Unlike `forRootAsync`, `forHttpService` does **not** register an internal `HttpModule` — the caller supplies a pre-resolved `HttpService` directly. Use it when a sibling module already constructs and exports the transport (for example `AuthRestModule` itself delegates `RestClient` construction to this method) and you want the canonical `new RestClient(httpService, resilience)` wiring without spinning up a second axios instance. Prefer `forRootAsync` for the typical case where the module should own the `HttpModule` registration.
 
 ### Configuration types
 
@@ -497,11 +529,51 @@ const fullyConfigured: ResilanceConfig<unknown, void, string> = {
 }
 ```
 
-### Hookable transport surface
+### HookableHttpService
 
-`RestClient` and `AuthRestClient` extend a shared `HookableHttpService` base class that owns the verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `postForm`, `putForm`, `patchForm`) and threads every call through an `onInvoke` / `onReturn` lifecycle. Cross-cutting concerns are layered by either
+`RestClient` and `AuthRestClient` extend a shared `HookableHttpService` base class that owns the verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `postForm`, `putForm`, `patchForm`). 
 
-// TODO: add HookableHttpService usage example
+```ts
+
+/**
+ * Logging facade that records every verb invocation and the resulting status.
+ * Wraps a fully resilient `RestClient`, so all calls still go through the
+ * underlying retry / circuit-breaker / bulkhead pipeline.
+ */
+@Injectable()
+export class LoggingRestClient extends HookableHttpService {
+  constructor(client: HttpService) {
+    super(client)
+  }
+
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    args: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    const startedAt = Date.now()
+    try {
+      // Forward to the wrapped transport. `super.dispatch` runs the default
+      // `callUnderlying` path; calling `this.callUnderlying` directly would
+      // bypass any further "around" logic a deeper subclass might add.
+      const response = await super.dispatch<T>(verb, args)
+      const elapsedMs = Date.now() - startedAt
+      console.log(
+        `[http] ${verb.toUpperCase()} ${args.url ?? args.config.url} -> ${response.status} (${elapsedMs} ms)`,
+      )
+      return response
+    }
+    catch (error) {
+      const elapsedMs = Date.now() - startedAt
+      console.error(
+        `[http] ${verb.toUpperCase()} ${args.url ?? args.config.url} failed after ${elapsedMs} ms`,
+        error,
+      )
+      throw error
+    }
+  }
+}
+```
+
 
 ## Special Thanks
 

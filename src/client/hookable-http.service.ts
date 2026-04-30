@@ -69,13 +69,14 @@ export interface HttpServiceLike {
 }
 
 /**
- * Carrier shape for the arguments observed by {@link HooksConfig.onInvoke}.
- * `url` and `data` are optional because not every verb owns those slots
- * (`request` carries everything in `config`; verbs in the `(url, config?)`
- * family own `url` but not `data`).
+ * Carrier shape for the verb-invocation arguments threaded through
+ * {@link HookableHttpService.dispatch}. `url` and `data` are optional because
+ * not every verb owns those slots (`request` carries everything in `config`;
+ * verbs in the `(url, config?)` family own `url` but not `data`).
  *
- * Hooks are expected to return a NEW object (or the original) — the dispatcher
- * never relies on object identity, only on the resulting field values.
+ * Subclasses that override {@link HookableHttpService.dispatch} treat this
+ * carrier as immutable — produce a new object when any field needs to change
+ * before forwarding to {@link HookableHttpService.callUnderlying}.
  */
 export interface InvokeArgs {
   config: AxiosRequestConfig
@@ -84,54 +85,20 @@ export interface InvokeArgs {
 }
 
 /**
- * Carrier shape for the arguments observed by {@link HooksConfig.onReturn}.
- * Augments {@link InvokeArgs} with the `response` produced by the underlying
- * transport so a hook can substitute or rewrite the response before it
- * surfaces to the caller.
- */
-export interface ReturnArgs {
-  config: AxiosRequestConfig
-  url?: string
-  data?: unknown
-  response: AxiosResponse
-}
-
-/**
- * Lifecycle hooks consumed by {@link HookableHttpService.dispatch}.
+ * Base class that exposes the {@link HttpServiceLike} verb surface and routes
+ * every call through the protected {@link dispatch} template method.
  *
- * - `onInvoke(args)` runs **before** the underlying transport call. It receives
- *   the verb's `{ url?, data?, config }` carrier and returns either the same
- *   carrier or a new one whose fields replace the originals at dispatch time.
- *   Treat the input as immutable — return a new object if any field changes.
- * - `onReturn(args)` runs **after** a successful transport response. It can
- *   substitute `response` (e.g. to apply a fallback) but must return the full
- *   carrier shape.
- *
- * Both hooks may be synchronous or asynchronous; the dispatcher awaits each.
- */
-export interface HooksConfig {
-  /** Pre-call hook: transform the verb's invocation args before dispatch. */
-  onInvoke?(args: InvokeArgs): Promise<InvokeArgs> | InvokeArgs
-  /** Post-call hook: observe or substitute the response after dispatch. */
-  onReturn?(args: ReturnArgs): Promise<ReturnArgs> | ReturnArgs
-}
-
-/**
- * Base class that exposes the {@link HttpServiceLike} verb surface and threads
- * every call through an {@link HooksConfig} lifecycle.
- *
- * Subclasses can layer cross-cutting concerns (resilience policies,
- * authentication, instrumentation, …) by either:
- * - supplying hooks via the constructor (the recommended path for stateless
- *   transformations like adding auth headers); or
- * - overriding the protected {@link dispatch} method to add behaviour around
- *   the entire lifecycle (the recommended path for "around" semantics that
- *   need access to the verb / args / errors).
+ * Subclasses layer cross-cutting concerns (resilience policies, authentication,
+ * instrumentation, …) by overriding {@link dispatch} and adding their own
+ * "around" semantics — e.g. wrapping the entire flow in `policy.execute(...)`
+ * or recovering from a 401 by replaying the underlying transport call with
+ * refreshed credentials.
  *
  * Each verb method materialises the canonical {@link InvokeArgs} carrier for
  * its argument shape (`request` → `{ config }`; `(url, config?)` verbs →
  * `{ url, config }`; data verbs → `{ url, data, config }`) and forwards to
- * {@link dispatch}, which applies hooks and calls the underlying transport.
+ * {@link dispatch}, which calls the underlying transport via
+ * {@link callUnderlying}.
  *
  * The `httpService` reference is `protected readonly` so subclasses (e.g. a
  * future logging facade) can read it without dropping back to a wider cast,
@@ -145,39 +112,22 @@ export abstract class HookableHttpService {
    */
   protected readonly httpService: HttpServiceLike
 
-  /**
-   * Lifecycle hooks captured at construction time. Defaults to an empty
-   * object so {@link dispatch} can read `hooks.onInvoke?.(...)` without an
-   * extra null guard.
-   */
-  protected readonly hooks: HooksConfig
-
-  constructor(httpService: HttpServiceLike, hooks: HooksConfig = {}) {
+  constructor(httpService: HttpServiceLike) {
     this.httpService = httpService
-    this.hooks = hooks
   }
 
   /**
-   * Dispatches a verb through the hook lifecycle. The default implementation
-   * runs `onInvoke` -> underlying transport -> `onReturn` and returns the
-   * resulting response.
-   *
-   * Subclasses override this to add "around" behaviour (e.g. wrapping the
-   * whole flow in `policy.execute(...)` or recovering from a 401 by retrying
-   * with refreshed credentials). When overriding, prefer to call
-   * `super.dispatch(verb, modifiedArgs)` to retain the hook semantics.
+   * Dispatches a verb to the underlying transport. The default implementation
+   * delegates straight to {@link callUnderlying}; subclasses override this to
+   * add "around" behaviour (e.g. wrapping the whole flow in
+   * `policy.execute(...)` or recovering from a 401 by retrying with refreshed
+   * credentials).
    */
   protected async dispatch<T = unknown>(
     verb: HttpVerb,
-    initialArgs: InvokeArgs,
+    args: InvokeArgs,
   ): Promise<AxiosResponse<T>> {
-    const modifiedArgs
-      = (await this.hooks.onInvoke?.(initialArgs)) ?? initialArgs
-    const response = await this.callUnderlying<T>(verb, modifiedArgs)
-    const finalArgs
-      = (await this.hooks.onReturn?.({ ...modifiedArgs, response }))
-      ?? { ...modifiedArgs, response }
-    return finalArgs.response as AxiosResponse<T>
+    return this.callUnderlying<T>(verb, args)
   }
 
   /**

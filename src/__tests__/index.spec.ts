@@ -78,8 +78,8 @@ describe('public surface (src/index.ts)', () => {
 
   describe('exhaustive named export list', () => {
     it('exports exactly the runtime + enum + lookup symbols documented in README', () => {
-      // Type-only exports (AuthConfig, AuthStrategy, ResilanceConfig, HooksConfig,
-      // HttpVerb, InvokeArgs, ReturnArgs, etc.) are erased at runtime; the runtime
+      // Type-only exports (AuthConfig, AuthStrategy, ResilanceConfig,
+      // HttpVerb, InvokeArgs, etc.) are erased at runtime; the runtime
       // keys must therefore be exactly the symbols below. Drift here is a public-API
       // change.
       const actualKeys = Object.keys(publicSurface).sort()

@@ -12,7 +12,7 @@ import {
 /**
  * End-to-end coverage for {@link AuthRestClient} against the shared
  * httpbin container started by `tests/e2e-setup.ts`. Exercises the
- * hook stack (`AuthRestClient.onInvoke` running on top of the inner
+ * dispatch override stack (`AuthRestClient.dispatch` running on top of the inner
  * `RestClient`'s `dispatch` override) end to end:
  * - Pre-flight `authenticateIfNeeded()` runs before every request.
  * - The strategy's `extendRequest()` injects an `Authorization: Bearer X`
