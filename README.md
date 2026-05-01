@@ -8,7 +8,7 @@ Zero-configuration resilience and transient-fault-handling HTTP client that wrap
 
 - **Zero-configuration resilience** — pragmatic default resilience preset, suitable for the majority of workloads.
 - **Composable resilience pipeline** — retry, circuit breaker, bulkhead, and fallback policies can be enabled independently and are wrapped in a single deterministic order.
-- **Pluggable authentication** — `AuthRestModule.forRootAsync` accepts a user-supplied `authenticate` callback that returns an `AuthStrategy` (Bearer, Basic, custom). Single-flight authentication, lazy refresh, and one-shot 401 recovery are built in.
+- **Pluggable authentication** — `AuthRestModule.forRootAsync` accepts a user-supplied class implementing `AuthStrategy` (Bearer, Basic, custom). The strategy is a full DI citizen registered via `useClass` self-binding, so it can constructor-inject `ConfigService` or any other provider. Single-flight authentication, lazy refresh, and one-shot 401 recovery are built in.
 - **Idempotency-aware retries** — only safe HTTP methods (`GET`, `HEAD`, `OPTIONS` by default) are retried on 5xx / network errors. Cancellations and SSL/cert failures are excluded from retry.
 - **Highly customizable** — fine-grained control over each resilience policy.
 - **Promises-based API** — all methods return plain Promises, not Observables. Despite that RXJS is great, people and LLMs much better at writing and reading Promises, rather than Observables.
@@ -216,83 +216,178 @@ const customConfig: ResilanceConfig<unknown> = {
 export class DataModule {}
 ```
 
-### Authenticated client — Bearer token
+### Authenticated client
 
-`AuthRestModule.forRootAsync` accepts a factory that returns the runtime collaborators (`httpService`, `authConfig`, optional `resilience`). The `authConfig.authenticate(client)` callback receives a fully resilient `RestClient` and must resolve to an `AuthStrategy`.
+> **Module choice.** For static API tokens, use `RestModule` directly with `axios.headers.Authorization` (see below) — no strategy class, no auth module. For dynamic credentials (token refresh, OAuth flows, anything where `isAuthenticated()` can become `false`), use `AuthRestModule` with a class implementing `AuthStrategy`.
+
+#### Static API token via `RestModule`
+
+When the credential is a long-lived API token (or any value the application never has to refresh), the simplest path is to set `axios.headers.Authorization` on the axios config that `RestModule` forwards to the internally-registered `HttpModule`. Every outbound request inherits the header automatically — no auth module, no strategy class, no 401 retry path.
 
 ```ts
-import { HttpModule, HttpService } from '@nestjs/axios'
 import { Module } from '@nestjs/common'
-import { AuthRestModule, RestClient, type AuthStrategy } from 'nestjs-http-client'
+import { ConfigModule, ConfigService } from '@nestjs/config'
+import { RestModule, RestClient } from 'nestjs-http-client'
 
 @Module({
   imports: [
-    HttpModule,
-    AuthRestModule.forRootAsync({
-      imports: [HttpModule],
-      inject: [HttpService],
-      useFactory: (httpService: HttpService) => ({
-        httpService,
-        authConfig: {
-          // `client` is a fully resilient RestClient — auth requests reuse the
-          // same resilience policy stack (retry, circuit breaker, …) as app calls.
-          authenticate: async (client: RestClient): Promise<AuthStrategy> => {
-            const tokenResponse = await client.post<{ access_token: string, expires_in: number }>(
-              'https://auth.example.com/oauth/token',
-              { grant_type: 'client_credentials', client_id: '...', client_secret: '...' },
-            )
-
-            const { access_token, expires_in } = tokenResponse.data
-            const expiresAt = Date.now() + expires_in * 1000
-
-            return {
-              isAuthenticated: () => Date.now() < expiresAt - 60_000,
-              extendRequest: (config) => ({
-                ...config,
-                headers: { ...(config.headers ?? {}), Authorization: `Bearer ${access_token}` },
-              }),
-            }
-          },
+    RestModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        axios: {
+          baseURL: 'https://api.example.com',
+          // Forwarded verbatim to the internally-registered HttpModule;
+          // every RestClient request inherits this header by default.
+          headers: { Authorization: `Bearer ${config.get('API_TOKEN')}` },
         },
       }),
+    }),
+  ],
+  exports: [RestClient],
+})
+export class CatalogModule {}
+```
+
+End-to-end coverage for this exact wiring lives in `tests/static-token.e2e.spec.ts`.
+
+#### Authenticated client — Bearer token
+
+`AuthRestModule.forRootAsync` takes a synchronous `authStrategy` class token plus an async `useFactory` that returns the runtime collaborators (`httpService`, optional `resilience`). The class implementing `AuthStrategy` is registered via `useClass` self-binding, so it is a full DI citizen and can constructor-inject any provider available in the surrounding module scope (e.g. `ConfigService`).
+
+The `AuthStrategy` interface declares four methods that together own the full session lifecycle:
+
+- `authenticate(client: RestClient): Promise<void>` — performs the handshake; the `client` argument is a fully resilient `RestClient`, so auth requests reuse the same resilience policy stack as application calls.
+- `isAuthenticated(): boolean` — gates whether the next request needs to re-authenticate.
+- `extendRequest(config: AxiosRequestConfig): AxiosRequestConfig` — applies the credentials to a request config (must not mutate the input).
+- `invalidate(): void` — drops the current session so the next request triggers a fresh handshake; called by `AuthRestClient` after a 401.
+
+```ts
+import { Inject, Injectable, Module } from '@nestjs/common'
+import { HttpService } from '@nestjs/axios'
+import { ConfigModule, ConfigService } from '@nestjs/config'
+import {
+  AuthRestModule,
+  RestClient,
+  type AuthStrategy,
+} from 'nestjs-http-client'
+import type { AxiosRequestConfig } from 'axios'
+
+// Strategy classes are full DI citizens — `@Injectable()` enables
+// constructor injection of any provider in the module scope.
+@Injectable()
+class BearerTokenStrategy implements AuthStrategy {
+  private token?: string
+  private expiresAt = 0
+
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
+
+  async authenticate(client: RestClient): Promise<void> {
+    // `client` is a fully resilient RestClient — auth requests reuse the
+    // same resilience policy stack (retry, circuit breaker, …) as app calls.
+    const response = await client.post<{ access_token: string, expires_in: number }>(
+      this.config.getOrThrow('AUTH_TOKEN_URL'),
+      {
+        grant_type: 'client_credentials',
+        client_id: this.config.getOrThrow('AUTH_CLIENT_ID'),
+        client_secret: this.config.getOrThrow('AUTH_CLIENT_SECRET'),
+      },
+    )
+    this.token = response.data.access_token
+    // Subtract 60 s so the session is refreshed before it actually expires.
+    this.expiresAt = Date.now() + response.data.expires_in * 1_000 - 60_000
+  }
+
+  isAuthenticated(): boolean {
+    return this.token !== undefined && Date.now() < this.expiresAt
+  }
+
+  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig {
+    return {
+      ...config,
+      headers: { ...(config.headers ?? {}), Authorization: `Bearer ${this.token}` },
+    }
+  }
+
+  invalidate(): void {
+    this.token = undefined
+    this.expiresAt = 0
+  }
+}
+
+@Module({
+  imports: [
+    AuthRestModule.forRootAsync({
+      // Synchronous: passed to NestJS DI as a class token, registered via
+      // `useClass` self-binding so it can resolve its own constructor deps.
+      authStrategy: BearerTokenStrategy,
+      // Async: runtime data only — httpService and optional resilience.
+      imports: [ConfigModule],
+      inject: [HttpService],
+      useFactory: (httpService: HttpService) => ({ httpService }),
     }),
   ],
 })
 export class AppModule {}
 ```
 
-### Authenticated client — Basic auth
+#### Authenticated client — Basic auth
 
-Basic authentication is just a different `extendRequest` strategy. Because the credentials never expire on a per-session basis, `isAuthenticated` returns `true` once a strategy has been produced.
+Basic authentication is just a different `extendRequest` strategy. Because the credentials never expire on a per-session basis, `authenticate` is a no-op and `isAuthenticated` always returns `true` — the strategy class still satisfies all four methods of the `AuthStrategy` interface.
 
 ```ts
-import { AuthRestModule, type AuthStrategy } from 'nestjs-http-client'
+import { Inject, Injectable } from '@nestjs/common'
+import { HttpService } from '@nestjs/axios'
+import { ConfigModule, ConfigService } from '@nestjs/config'
+import {
+  AuthRestModule,
+  type AuthStrategy,
+  type RestClient,
+} from 'nestjs-http-client'
+import type { AxiosRequestConfig } from 'axios'
+
+@Injectable()
+class BasicAuthStrategy implements AuthStrategy {
+  private readonly credentials: string
+
+  constructor(@Inject(ConfigService) config: ConfigService) {
+    const user = config.getOrThrow<string>('BASIC_AUTH_USER')
+    const pass = config.getOrThrow<string>('BASIC_AUTH_PASS')
+    this.credentials = Buffer.from(`${user}:${pass}`).toString('base64')
+  }
+
+  // No handshake: the credentials are derived once in the constructor.
+  async authenticate(_client: RestClient): Promise<void> {}
+
+  // Static credentials never expire; always authenticated.
+  isAuthenticated(): boolean {
+    return true
+  }
+
+  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig {
+    return {
+      ...config,
+      headers: { ...(config.headers ?? {}), Authorization: `Basic ${this.credentials}` },
+    }
+  }
+
+  // No cached session to drop, but the contract still requires the method.
+  invalidate(): void {}
+}
 
 AuthRestModule.forRootAsync({
+  authStrategy: BasicAuthStrategy,
+  imports: [ConfigModule],
   inject: [HttpService],
-  useFactory: (httpService: HttpService) => ({
-    httpService,
-    authConfig: {
-      authenticate: async (): Promise<AuthStrategy> => {
-        const credentials = Buffer.from('user:pass').toString('base64')
-        return {
-          isAuthenticated: () => true,
-          extendRequest: (config) => ({
-            ...config,
-            headers: { ...(config.headers ?? {}), Authorization: `Basic ${credentials}` },
-          }),
-        }
-      },
-    },
-  }),
+  useFactory: (httpService: HttpService) => ({ httpService }),
 })
 ```
 
 Inject `AuthRestClient` into any service. Each request method automatically:
 
-1. Calls `authStrategy.authenticateIfNeeded()` (single-flight; concurrent callers share one handshake).
-2. Augments the request via `authStrategy.extendRequest(config)`.
-3. On a single HTTP 401 response, drops the cached strategy, re-authenticates, and retries the underlying request once.
+1. Calls `authProcessor.authenticateIfNeeded()` (single-flight; concurrent callers share one handshake).
+2. Augments the request via `authProcessor.extendRequest(config)` (which delegates to `strategy.extendRequest`).
+3. On a single HTTP 401 response, calls `authProcessor.clearAuth()` (which delegates to `strategy.invalidate()`), re-authenticates, and retries the underlying request once.
 
 ```ts
 import { Injectable } from '@nestjs/common'
@@ -311,9 +406,10 @@ export class OrdersService {
 
 ## Behaviour notes
 
-- **401 retry** — on a single HTTP 401, `AuthRestClient` drops the cached strategy, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then replays the call exactly once against the underlying transport (which itself runs through the resilience pipeline). A second 401 — or any non-401 error — is rethrown without touching the cached strategy.
-- **Concurrent authentication** — any number of concurrent authentication attempts result in single real request to authentication service.
-- **Cancellation** — the cockatiel and user `signal` is forwarded into axios. So retries, timeouts, and circuit-breakers can cancel in-flight axios calls cooperatively. 
+- **401 retry** — on a single HTTP 401, `AuthRestClient` calls `strategy.invalidate()` via the `AuthProcessor`, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then replays the call exactly once against the underlying transport (which itself runs through the resilience pipeline). A second 401 — or any non-401 error — is rethrown without re-invalidating the strategy.
+- **Concurrent authentication** — any number of concurrent authentication attempts result in a single real request to the authentication service. The `AuthProcessor` enforces single-flight semantics via `@DeduplicateInflight` on the underlying `strategy.authenticate(client)` call.
+- **Cancellation** — the cockatiel and user `signal` is forwarded into axios. So retries, timeouts, and circuit-breakers can cancel in-flight axios calls cooperatively.
+
 ## API Reference
 
 ### Classes
@@ -334,40 +430,45 @@ Public methods mirror `HttpService`:
 
 #### `AuthRestClient`
 
-Authenticated facade over `RestClient`. Composes a `RestClient` (which owns the resilience policy stack) with an `AuthStrategyService` (which owns the authentication lifecycle).
+Authenticated facade over `RestClient`. Composes a `RestClient` (which owns the resilience policy stack) with an `AuthProcessor` (which orchestrates the authentication lifecycle by delegating to a user-supplied `AuthStrategy`).
 
 ```ts
-new AuthRestClient(restClient: RestClient, authStrategy: AuthStrategyService)
+new AuthRestClient(restClient: RestClient, authProcessor: AuthProcessor)
 ```
 
 Same public method surface as `RestClient`. Each call authenticates first, augments the request via `extendRequest`, and recovers from a single 401.
 
-#### `AuthStrategyService`
+#### `AuthProcessor`
 
-Owns the authentication lifecycle for an `AuthRestClient`.
+Orchestrates the per-request authentication lifecycle by delegating every session-state query to an injected `AuthStrategy` class instance. Holds **no** cached `authResult` — the strategy itself owns the session state, and the processor only enforces cross-cutting concerns (single-flight handshake via `@DeduplicateInflight`, pre-flight gating, 401 invalidation).
 
 ```ts
-new AuthStrategyService(authConfig: AuthConfig, client: RestClient)
+new AuthProcessor(strategy: AuthStrategy, client: RestClient)
 ```
 
 Public methods:
 
-- `authenticateIfNeeded(): Promise<void>` — re-authenticates only when the cached strategy is missing or has reported `isAuthenticated() === false`. Concurrent callers share a single in-flight handshake.
-- `extendRequest(config: AxiosRequestConfig): AxiosRequestConfig` — delegates to the cached strategy. Returns the input untouched when no strategy is cached.
-- `clearAuth(): void` — invalidates the cached strategy.
-- `isAuthenticated(): boolean` — `true` only when a cached strategy exists *and* its own `isAuthenticated()` reports valid.
+- `isAuthenticated(): boolean` — pure delegation to `strategy.isAuthenticated()`. The processor caches nothing; the strategy is the single source of truth.
+- `authenticateIfNeeded(): Promise<void>` — short-circuits when `isAuthenticated()` returns `true`; otherwise triggers a fresh `strategy.authenticate(client)` handshake. Concurrent callers share a single in-flight handshake (single-flight via `@DeduplicateInflight`).
+- `extendRequest(config: AxiosRequestConfig): AxiosRequestConfig` — pure delegation to `strategy.extendRequest(config)`. The strategy contract forbids mutating the input.
+- `clearAuth(): void` — pure delegation to `strategy.invalidate()`. After this call, `isAuthenticated()` returns `false` and the next `authenticateIfNeeded()` triggers a fresh handshake. Used by `AuthRestClient`'s 401 retry path.
 
 #### `AuthRestModule`
 
-NestJS dynamic module that wires `AUTH_MODULE_OPTIONS`, `RestClient`, `AuthStrategyService`, and `AuthRestClient`. Exports `AuthRestClient` and `RestClient`.
+NestJS dynamic module that wires `AUTH_MODULE_OPTIONS`, the user's `AuthStrategy` class (registered via `useClass` self-binding), `RestClient`, `AuthProcessor`, and `AuthRestClient`. Exports `AuthRestClient` and `RestClient`.
 
 ```ts
 AuthRestModule.forRootAsync(options: {
+  authStrategy: Type<AuthStrategy>
   useFactory: (...args: unknown[]) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
   inject?: unknown[]
   imports?: unknown[]
 }): DynamicModule
 ```
+
+- `authStrategy` — class implementing `AuthStrategy`; used as both the DI token and the `useClass` value (self-binding). Must carry `@Injectable()` if it has constructor dependencies, otherwise NestJS cannot resolve constructor parameter metadata and will throw at module bootstrap.
+- `useFactory` — async factory returning `AuthRestModuleOptions` (runtime data only: `httpService`, optional `resilience`).
+- `inject` / `imports` — forwarded to the internal `HttpModule.registerAsync` and `RestModule.forHttpService` calls so the factory can depend on any provider exported from `imports` (e.g. `ConfigService`).
 
 `HttpModule` is always imported alongside the caller's `imports`, so factories may `inject: [HttpService]` directly.
 
@@ -394,14 +495,12 @@ interface RestModuleOptions {
 }
 ```
 
-`AuthRestModule.forRootAsync` accepts a parallel `AuthRestModuleOptions` shape:
+`AuthRestModule.forRootAsync` accepts a parallel `AuthRestModuleOptions` shape. Note that the strategy *class token* is no longer carried inside this options object — it is passed synchronously as the top-level `authStrategy` field on `forRootAsync`'s argument so the DI container can register it before the async factory resolves.
 
 ```ts
 interface AuthRestModuleOptions {
   /** Upstream `@nestjs/axios` HTTP transport used by the constructed `RestClient`. */
   httpService: HttpService
-  /** User-supplied authentication factory consumed by `AuthStrategyService`. */
-  authConfig: AuthConfig
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
   resilience?: ResilanceConfig<unknown>
 }
@@ -430,30 +529,42 @@ Unlike `forRootAsync`, `forHttpService` does **not** register an internal `HttpM
 
 ### Configuration types
 
-#### `AuthConfig`
-
-User-supplied authentication factory.
-
-```ts
-interface AuthConfig {
-  authenticate(client: RestClient): Promise<AuthStrategy>
-}
-```
-
-The `client` argument is a fully resilient `RestClient`, so auth requests reuse the same resilience policy stack as application requests.
-
 #### `AuthStrategy`
 
-Strategy returned by `AuthConfig.authenticate`. Represents an active authentication session.
+Strategy that owns the full lifecycle of an authentication session: performing the initial handshake, reporting whether the cached credentials are still valid, attaching them to outgoing requests, and invalidating the session when it has been rejected by the upstream service. Implementations are user-supplied classes registered with `AuthRestModule` via `authStrategy: Type<AuthStrategy>`.
 
 ```ts
 interface AuthStrategy {
+  /**
+   * Performs the authentication handshake and stores the resulting session
+   * state on the implementation instance itself. Called inside a
+   * single-flight wrapper, so concurrent callers share one in-flight
+   * handshake. The `client` is a fully resilient `RestClient`, so auth
+   * requests reuse the same resilience policy stack as application calls.
+   */
+  authenticate(client: RestClient): Promise<void>
+
+  /**
+   * Returns `true` while the current credentials are still considered valid.
+   * Must return `false` when no session has been established yet or after
+   * `invalidate()` has been called.
+   */
   isAuthenticated(): boolean
+
+  /**
+   * Returns a NEW `AxiosRequestConfig` with authentication material applied.
+   * MUST NOT mutate the input — callers may reuse the original config.
+   */
   extendRequest(config: AxiosRequestConfig): AxiosRequestConfig
+
+  /**
+   * Drops the current session so the next request triggers a fresh
+   * `authenticate()` call. Invoked by `AuthRestClient` after the upstream
+   * service rejects a request with HTTP 401.
+   */
+  invalidate(): void
 }
 ```
-
-`extendRequest` MUST NOT mutate its input — callers may reuse the original config.
 
 #### `ResilanceConfig<T, S = void, R = unknown>`
 

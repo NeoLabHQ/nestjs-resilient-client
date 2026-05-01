@@ -65,6 +65,32 @@ function mergeSignal(
  * inspect or instrument the composed policy (e.g. for circuit-breaker state
  * snapshots). The field is initialised once in the constructor — there is no
  * supported runtime mutation path.
+ *
+ * @example
+ * ```ts
+ * import { Module } from '@nestjs/common'
+ * import { RestModule, RestClient, ResilencePresets } from 'nestjs-http-client'
+ *
+ * // Inject RestClient via RestModule (recommended).
+ * // RestModule.forRootAsync handles HttpModule registration and wiring.
+ * @Module({
+ *   imports: [
+ *     RestModule.forRootAsync({
+ *       useFactory: () => ({
+ *         axios: { baseURL: 'https://api.example.com' },
+ *         resilience: ResilencePresets.RESTFULL,
+ *       }),
+ *     }),
+ *   ],
+ * })
+ * export class AppModule {}
+ *
+ * // Or construct directly when you already have an HttpService.
+ * // The response type parameter narrows `response.data` to `{ id: number; name: string }`.
+ * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+ * const response = await client.get<{ id: number; name: string }>('/products/42')
+ * console.log(response.data.name) // 'Widget'
+ * ```
  */
 export class RestClient extends HookableHttpService implements Loggable {
   /** NestJS logger; required by `Loggable` from `nestjs-log-decorator`. */
@@ -74,6 +100,24 @@ export class RestClient extends HookableHttpService implements Loggable {
    * Composed resilience policy used by {@link dispatch} to wrap every
    * request. The `any` result-type on `IPolicy` mirrors the heterogeneous
    * `AxiosResponse<T, D>` shapes that flow through every verb.
+   *
+   * The field is `public readonly` so external consumers can introspect the
+   * composed policy — for example, to read circuit-breaker state or attach
+   * event listeners for observability.
+   *
+   * @example
+   * ```ts
+   * import { CircuitBreakerPolicy } from 'cockatiel'
+   * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+   *
+   * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+   *
+   * // Inspect the composed policy at runtime.
+   * // CircuitBreakerPolicy exposes a `.state` getter for diagnostics.
+   * if (client.policy instanceof CircuitBreakerPolicy) {
+   *   console.log('circuit state:', client.policy.state)
+   * }
+   * ```
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- IPolicy result type must be `any` because per-verb response shapes vary across calls
   readonly policy: IPolicy<IDefaultPolicyContext, any>
@@ -96,6 +140,18 @@ export class RestClient extends HookableHttpService implements Loggable {
    * Caller-supplied signals are composed with the policy signal via
    * `AbortSignal.any` so external cancellation continues to abort the request
    * alongside cockatiel-driven aborts.
+   *
+   * @example
+   * ```ts
+   * import { RestClient } from 'nestjs-http-client'
+   *
+   * // RestClient.dispatch is called automatically on every public verb call.
+   * // The policy wraps the request transparently — no special call-site needed.
+   * const client = new RestClient(httpService)
+   * const response = await client.get('/health')
+   * // If the upstream is slow or returns 5xx, the policy retries automatically.
+   * console.log(response.status) // 200 after retries succeed
+   * ```
    */
   protected override async dispatch<T = unknown>(
     verb: HttpVerb,

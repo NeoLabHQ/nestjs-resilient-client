@@ -37,11 +37,7 @@ export const LOW_QUALITY_TIMEOUT_MS = 180_000;
  * Ready-made resilience presets exposed as a `const` object whose values are
  * the {@link ResilanceConfig} payloads themselves. This shape lets consumers
  * pass a preset directly to {@link RestClient}'s constructor or to
- * `RestModule.forRootAsync` without an extra lookup step:
- *
- * ```ts
- * new RestClient(http, ResilencePresets.RESTFULL)
- * ```
+ * `RestModule.forRootAsync` without an extra lookup step.
  *
  * The `as const` annotation preserves the literal types of the inner config
  * objects so the {@link ResilencePresets} type alias produces a narrowed
@@ -51,13 +47,65 @@ export const LOW_QUALITY_TIMEOUT_MS = 180_000;
  * Consumers building configuration tables keyed by preset *name* can read
  * `Object.keys(ResilencePresets)` — the keys are stable identifiers documented
  * in the README's "Configuration Strategies" section.
+ *
+ * @example
+ * ```ts
+ * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+ *
+ * // Use CONSERVATIVE preset (default — safe methods only, 60 s per-attempt timeout)
+ * const conservative = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+ *
+ * // Use RESTFULL preset (includes PUT/DELETE retries, 10 s timeout)
+ * const restfull = new RestClient(httpService, ResilencePresets.RESTFULL)
+ *
+ * // Use LOW_QUALITY preset (safe methods only, 3 min per-attempt timeout)
+ * const lowQuality = new RestClient(httpService, ResilencePresets.LOW_QUALITY)
+ *
+ * // Pass a preset to RestModule.forRootAsync
+ * RestModule.forRootAsync({
+ *   useFactory: () => ({
+ *     axios: { baseURL: 'https://api.example.com' },
+ *     resilience: ResilencePresets.RESTFULL,
+ *   }),
+ * })
+ * ```
  */
 export const ResilencePresets = {
+    /**
+     * Default preset. Retries `GET`, `HEAD`, and `OPTIONS` up to 3 times on 5xx
+     * and network errors with exponential backoff. `PUT`, `DELETE`, `PATCH`, and
+     * `POST` are NOT retried. Per-attempt timeout is 60 seconds. A sampling
+     * circuit breaker opens after near-total failure for 60 seconds.
+     *
+     * @example
+     * ```ts
+     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     *
+     * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+     * const response = await client.get('/health')
+     * console.log(response.status) // 200
+     * ```
+     */
     CONSERVATIVE: {
         retry: safeMethodsRetry,
         circuitBreaker: defaultCircutBreaker,
         timeout: CONSERVATIVE_TIMEOUT_MS,
     },
+    /**
+     * Preset for well-implemented RESTful APIs that honour idempotency on `PUT`
+     * and `DELETE`. Retries `GET`, `HEAD`, `OPTIONS`, `PUT`, and `DELETE` up to
+     * 3 times on 5xx and network errors. `PATCH` and `POST` are NOT retried.
+     * Per-attempt timeout is 10 seconds (tighter than CONSERVATIVE to fail fast).
+     *
+     * @example
+     * ```ts
+     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     *
+     * const client = new RestClient(httpService, ResilencePresets.RESTFULL)
+     * const response = await client.put('/resources/42', { name: 'updated' })
+     * console.log(response.status) // 200 (retried on transient 503)
+     * ```
+     */
     RESTFULL: {
         retry: {
             ...safeMethodsRetry,
@@ -66,6 +114,22 @@ export const ResilencePresets = {
         circuitBreaker: defaultCircutBreaker,
         timeout: RESTFULL_TIMEOUT_MS,
     },
+    /**
+     * Preset for upstream services with known reliability issues or slow
+     * response times. Identical to CONSERVATIVE but with a 3-minute (180 s)
+     * per-attempt timeout — use when the upstream legitimately takes longer to
+     * respond and you still want retry coverage on transient failures.
+     *
+     * @example
+     * ```ts
+     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     *
+     * const client = new RestClient(httpService, ResilencePresets.LOW_QUALITY)
+     * // Long-running safe request; retried up to 3 times with up to 3 min per attempt.
+     * const response = await client.get('/slow-report')
+     * console.log(response.status) // 200
+     * ```
+     */
     LOW_QUALITY: {
         retry: safeMethodsRetry,
         circuitBreaker: defaultCircutBreaker,

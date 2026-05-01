@@ -12,6 +12,28 @@ import { RestClient } from './rest.client'
  * `HttpModule`. Used by {@link AuthRestModule} to delegate `RestClient` construction
  * to `RestModule`, eliminating the duplicated `new RestClient(httpService, config)`
  * call that would otherwise exist in both modules.
+ *
+ * @example
+ * ```ts
+ * import { HttpModule, HttpService } from '@nestjs/axios'
+ * import { Module } from '@nestjs/common'
+ * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+ *
+ * @Module({
+ *   imports: [
+ *     HttpModule,
+ *     RestModule.forHttpService({
+ *       imports: [HttpModule],
+ *       inject: [HttpService],
+ *       useFactory: (httpService: HttpService) => ({
+ *         httpService,
+ *         resilience: ResilencePresets.RESTFULL,
+ *       }),
+ *     }),
+ *   ],
+ * })
+ * export class CatalogModule {}
+ * ```
  */
 export interface RestFromHttpServiceOptions {
   /** Pre-resolved `@nestjs/axios` transport to hand to the constructed {@link RestClient}. */
@@ -32,6 +54,25 @@ export interface RestFromHttpServiceOptions {
  * - `resilience` — optional resilience policy stack. When omitted, the
  *   module falls back to the CONSERVATIVE preset inside the {@link RestClient}
  *   provider factory (matching the documented {@link RestClient} default).
+ *
+ * @example
+ * ```ts
+ * import { ConfigModule, ConfigService } from '@nestjs/config'
+ * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+ * import type { RestModuleOptions } from 'nestjs-http-client'
+ *
+ * RestModule.forRootAsync({
+ *   imports: [ConfigModule],
+ *   inject: [ConfigService],
+ *   useFactory: (config: ConfigService): RestModuleOptions => ({
+ *     axios: {
+ *       baseURL: config.get('API_BASE_URL'),
+ *       timeout: 5_000,
+ *     },
+ *     resilience: ResilencePresets.RESTFULL,
+ *   }),
+ * })
+ * ```
  */
 export interface RestModuleOptions {
   /**
@@ -52,6 +93,23 @@ export interface RestModuleOptions {
  *
  * Exported for advanced consumers that need to inject the raw options object
  * into their own providers (e.g. for diagnostics or test fixtures).
+ *
+ * @example
+ * ```ts
+ * import { Inject, Injectable } from '@nestjs/common'
+ * import { REST_MODULE_OPTIONS, type RestModuleOptions } from 'nestjs-http-client'
+ *
+ * @Injectable()
+ * export class DiagnosticsService {
+ *   constructor(
+ *     @Inject(REST_MODULE_OPTIONS) private readonly opts: RestModuleOptions,
+ *   ) {}
+ *
+ *   getBaseUrl(): string {
+ *     return this.opts.axios?.baseURL ?? '(none)'
+ *   }
+ * }
+ * ```
  */
 export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
 
@@ -75,6 +133,24 @@ export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
  * construct {@link RestClient} for the unauthenticated stack. Re-registering
  * {@link RestClient} elsewhere will produce a second, unrelated instance and
  * break shared circuit-breaker / bulkhead state.
+ *
+ * @example
+ * ```ts
+ * import { Module } from '@nestjs/common'
+ * import { RestModule } from 'nestjs-http-client'
+ *
+ * @Module({
+ *   imports: [
+ *     RestModule.forRootAsync({
+ *       useFactory: () => ({
+ *         axios: { baseURL: 'https://api.example.com' },
+ *       }),
+ *     }),
+ *   ],
+ *   exports: [RestModule],
+ * })
+ * export class CatalogModule {}
+ * ```
  */
 @Module({})
 export class RestModule {
@@ -96,6 +172,28 @@ export class RestModule {
    *
    * @param options - Async factory descriptor with a `useFactory` that returns {@link RestFromHttpServiceOptions}.
    * @returns DynamicModule providing and exporting {@link RestClient}.
+   *
+   * @example
+   * ```ts
+   * import { HttpModule, HttpService } from '@nestjs/axios'
+   * import { Module } from '@nestjs/common'
+   * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+   *
+   * @Module({
+   *   imports: [
+   *     HttpModule,
+   *     RestModule.forHttpService({
+   *       imports: [HttpModule],
+   *       inject: [HttpService],
+   *       useFactory: (httpService: HttpService) => ({
+   *         httpService,
+   *         resilience: ResilencePresets.RESTFULL,
+   *       }),
+   *     }),
+   *   ],
+   * })
+   * export class CatalogModule {}
+   * ```
    */
   static forHttpService(options: {
     useFactory: (
@@ -146,6 +244,38 @@ export class RestModule {
    *
    * @param options - Async factory descriptor. Matches the NestJS dynamic-module idiom.
    * @returns DynamicModule wiring REST_MODULE_OPTIONS, HttpModule, and RestClient.
+   *
+   * @example
+   * ```ts
+   * import { Module, Injectable } from '@nestjs/common'
+   * import { ConfigModule, ConfigService } from '@nestjs/config'
+   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-http-client'
+   *
+   * @Module({
+   *   imports: [
+   *     RestModule.forRootAsync({
+   *       imports: [ConfigModule],
+   *       inject: [ConfigService],
+   *       useFactory: (config: ConfigService) => ({
+   *         axios: { baseURL: config.get('API_BASE_URL') },
+   *         resilience: ResilencePresets.CONSERVATIVE,
+   *       }),
+   *     }),
+   *   ],
+   *   exports: [RestModule],
+   * })
+   * export class CatalogModule {}
+   *
+   * // Then inject RestClient anywhere in the module
+   * @Injectable()
+   * export class CatalogService {
+   *   constructor(private readonly client: RestClient) {}
+   *   async getProduct(id: string) {
+   *     const response = await this.client.get<{ id: string; name: string }>(`/products/${id}`)
+   *     return response.data
+   *   }
+   * }
+   * ```
    */
   static forRootAsync(options: {
     useFactory: (

@@ -12,6 +12,24 @@ import type {
     TimeoutStrategy,
 } from "cockatiel";
 
+/**
+ * Configuration for the retry policy. Controls how many attempts are made,
+ * the delay strategy between attempts, and optional lifecycle callbacks.
+ *
+ * @example
+ * ```ts
+ * import { isAxiosError } from 'axios'
+ * import { ExponentialBackoff } from 'cockatiel'
+ * import type { RetryConfig } from 'nestjs-http-client'
+ *
+ * const retryConfig: RetryConfig<unknown> = {
+ *   maxAttempts: 3,
+ *   backoff: new ExponentialBackoff(),
+ *   shouldRetry: (error) => !isAxiosError(error) || (error.response?.status ?? 0) >= 500,
+ *   onRetry: ({ attempt, delay }) => console.log(`Retry attempt ${attempt} after ${delay}ms`),
+ * }
+ * ```
+ */
 export interface RetryConfig<T, S = void> {
     shouldRetry?: (error: Error) => boolean;
     maxAttempts: number;
@@ -39,10 +57,27 @@ export interface RetryConfig<T, S = void> {
     onGiveUp?: (data: FailureReason<unknown>) => void;
 }
 
-/** 
- * Circuit breakers stop execution for a period of time after a failure threshold has been reached. 
- * This is very useful to allow faulting systems to recover without overloading them. 
- * */
+/**
+ * Circuit breakers stop execution for a period of time after a failure threshold has been reached.
+ * This is very useful to allow faulting systems to recover without overloading them.
+ *
+ * @example
+ * ```ts
+ * import type { CircuitBreakerConfig } from 'nestjs-http-client'
+ *
+ * // Open after 5 consecutive failures; probe again after 30 s
+ * const cbConfig: CircuitBreakerConfig = {
+ *   breaker: 5,
+ *   halfOpenAfter: 30_000,
+ * }
+ *
+ * // Open when ≥ 50 % of requests over a 30 s sampling window fail
+ * const samplingCbConfig: CircuitBreakerConfig = {
+ *   breaker: { threshold: 0.5, duration: 30_000, minimumRps: 10 },
+ *   halfOpenAfter: 60_000,
+ * }
+ * ```
+ */
 export interface CircuitBreakerConfig {
     shouldBreak?: (error: Error) => boolean;
     /**
@@ -71,10 +106,21 @@ export interface CircuitBreakerConfig {
     onFailure?: (data: IFailureEvent) => void;
 }
 
-/** 
- * A Bulkhead is a simple structure that limits the number of concurrent calls. 
- * Attempting to exceed the capacity will cause execute() to throw a BulkheadRejectedError.
- * */
+/**
+ * A Bulkhead is a simple structure that limits the number of concurrent calls.
+ * Attempting to exceed the capacity will cause `execute()` to throw a `BulkheadRejectedError`.
+ *
+ * @example
+ * ```ts
+ * import type { BulkheadConfig } from 'nestjs-http-client'
+ *
+ * // Allow at most 10 concurrent requests; queue up to 20 more before rejecting
+ * const bulkheadConfig: BulkheadConfig = {
+ *   limit: 10,
+ *   queue: 20,
+ * }
+ * ```
+ */
 export interface BulkheadConfig {
     /** The maximum number of concurrent calls allowed. */
     limit: number;
@@ -97,6 +143,18 @@ export interface BulkheadConfig {
  * call). The timeout is wrapped INSIDE retry in the resilience pipeline, so
  * each retry attempt receives its own independent deadline — a 60 s timeout
  * applies per attempt, allowing retry to recover from transient slowness.
+ *
+ * @example
+ * ```ts
+ * import { TimeoutStrategy } from 'cockatiel'
+ * import type { TimeoutConfig } from 'nestjs-http-client'
+ *
+ * // 10 s per attempt with cooperative cancellation (axios honours the signal)
+ * const timeoutConfig: TimeoutConfig = {
+ *   duration: 10_000,
+ *   strategy: TimeoutStrategy.Cooperative,
+ * }
+ * ```
  */
 export interface TimeoutConfig {
     /** Maximum duration per attempt, in milliseconds. */
@@ -116,10 +174,26 @@ export interface TimeoutConfig {
 }
 
 /**
- * Creates a policy that returns the valueOrFactory if an executed function fails.
- * As the name suggests, valueOrFactory either be a value,
- * or a function we'll call when a failure happens to create a value.
- * */
+ * Creates a policy that returns the `valueOrFactory` if an executed function fails.
+ * `valueOrFactory` can be a static value or a factory function invoked on each
+ * policy-handled failure to produce the degraded response.
+ *
+ * @example
+ * ```ts
+ * import type { FallbackConfig } from 'nestjs-http-client'
+ *
+ * // Return a static empty array when every retry attempt is exhausted
+ * const fallbackConfig: FallbackConfig<string[]> = {
+ *   valueOrFactory: [],
+ * }
+ *
+ * // Produce a response dynamically using a factory function
+ * const cache = new Map<string, string[]>([['items', ['a', 'b']]])
+ * const dynamicFallback: FallbackConfig<string[]> = {
+ *   valueOrFactory: () => cache.get('items') ?? [],
+ * }
+ * ```
+ */
 export interface FallbackConfig<R = unknown> {
     shouldFallback?: (error: Error) => boolean;
     valueOrFactory: (() => Promise<R> | R) | R;
@@ -128,6 +202,36 @@ export interface FallbackConfig<R = unknown> {
     onFailure?: (data: IFailureEvent) => void;
 }
 
+/**
+ * Composable resilience configuration. Each field is optional; an empty config
+ * produces a `NoopPolicy`. Fields are composed in the order: retry → timeout →
+ * circuitBreaker → bulkhead → fallback.
+ *
+ * @example
+ * ```ts
+ * import { ExponentialBackoff } from 'cockatiel'
+ * import type { ResilanceConfig } from 'nestjs-http-client'
+ *
+ * // Retry-only configuration with exponential backoff
+ * const retryOnly: ResilanceConfig<unknown> = {
+ *   retry: {
+ *     maxAttempts: 3,
+ *     backoff: new ExponentialBackoff(),
+ *   },
+ * }
+ *
+ * // Full pipeline: retry + per-attempt timeout + sampling circuit breaker + bulkhead
+ * const fullConfig: ResilanceConfig<unknown> = {
+ *   retry: { maxAttempts: 3, backoff: [100, 500] },
+ *   timeout: 10_000,
+ *   circuitBreaker: {
+ *     breaker: { threshold: 0.5, duration: 30_000, minimumRps: 10 },
+ *     halfOpenAfter: 60_000,
+ *   },
+ *   bulkhead: { limit: 20, queue: 40 },
+ * }
+ * ```
+ */
 export interface ResilanceConfig<T, S = void, R = unknown> {
     /** Retry request multiple times if it fails. */
     retry?: RetryConfig<T, S>;

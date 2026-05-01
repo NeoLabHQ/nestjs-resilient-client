@@ -1,56 +1,57 @@
 ---
 name: NestJS HTTP Client Architecture
-description: Architecture patterns, decorator design, and testing setup for the nestjs-http-client library — RestClient, AuthRestClient, AuthStrategyService, @ExecuteWithPolicy, @Authenticate, and the jest/Stryker/testcontainers test stack.
+description: Architecture patterns, decorator design, and testing setup for the nestjs-http-client library — RestClient, AuthRestClient, AuthProcessor, @ExecuteWithPolicy, @DeduplicateInflight, and the jest/Stryker/testcontainers test stack.
 topics: nestjs, http-client, base-decorators, cockatiel, jest, stryker, testcontainers, resilience, authentication, decorators
 created: 2026-04-26
-updated: 2026-04-26
-scratchpad: .specs/scratchpad/8f110da9.md
+updated: 2026-04-30
+scratchpad: .specs/scratchpad/8f5da770.md
 ---
 
 # NestJS HTTP Client Architecture
 
 ## Overview
 
-This skill documents the architecture of the `nestjs-http-client` library. The library wraps `@nestjs/axios`'s `HttpService` with a cockatiel resilience policy stack. It exposes two clients: `RestClient` (resilient HTTP client) and `AuthRestClient` (authenticated HTTP client). Decorator logic uses `base-decorators@1.1.0` primitives (`Wrap`, `OnErrorHook`, `Effect`). Testing uses jest@29 + ts-jest, Stryker v8, jest-it-up, and testcontainers.
+This skill documents the architecture of the `nestjs-http-client` library. The library wraps `@nestjs/axios`'s `HttpService` with a cockatiel resilience policy stack. It exposes two clients: `RestClient` (resilient HTTP client) and `AuthRestClient` (authenticated HTTP client). Decorator logic uses `base-decorators@1.1.0` primitives (`Wrap`). Testing uses jest@29 + ts-jest, Stryker v8, jest-it-up, and testcontainers.
+
+**As of the improve-auth-rest-client task:** `AuthStrategyService` is being renamed to `AuthProcessor`, `AuthConfig` interface is being removed, and `AuthStrategy` is promoted from a factory return value to a class-based injectable with its own `authenticate(client)` method.
 
 ---
 
-## Current State vs Target State
+## Current Implemented State
 
-**CRITICAL**: The codebase is currently in a **broken initial draft state**. The skill describes the TARGET architecture — not the current state. Implementors must be aware of all broken items before writing any code.
+The codebase is **fully implemented** on branch `feature/vg/library-usability-improvements`. All tests pass. The architecture described below reflects the IMPLEMENTED state plus the pending auth refactor.
 
-### Current State (broken)
+### Implemented Files (verified 2026-04-30)
 
-- `HttpClient` (`src/client/http.client.ts`) — exists, uses `executeRequest` private method (not yet a decorator)
-- `AuthenticatedHttpService` (`src/auth/authenticated-http.service.ts`) — exists, uses `p-retry` + Observable + `firstValueFrom` + rigid 4-field `AuthConfig`
-- `src/deduplicate-inflight.decorator.ts` — exists but **broken**: imports `KeyBuilder` from `./cache.decorator` which **does not exist**
-- `src/deduplicate-inflight.decorator.spec.ts` — exists but **broken**: uses `@/cache/...` path alias which **is not configured** in `tsconfig.json`
-- `tests/index.test.ts` — **broken**: imports `fn` from `'../src'` which is **not exported** from `src/index.ts`
-- `base-decorators` — **NOT installed** (not in `package.json`, not in `node_modules`)
-- `jest`, `ts-jest`, `@types/jest` — **NOT installed** (vitest@^4.0.16 is installed instead)
-- `jest-it-up`, `@stryker-mutator/*`, `testcontainers` — **NOT installed**
-- `tsconfig.json` has **no `paths` field** — path aliases like `@/cache` are not configured
-
-### Target State (to be built)
-
-- `RestClient` replaces `HttpClient`; `@ExecuteWithPolicy` decorator (via `Wrap`) replaces the private `executeRequest` method
-- `AuthRestClient` replaces `AuthenticatedHttpService`; uses `RestClient`, no rxjs/p-retry
-- `AuthStrategyService` manages authentication lifecycle with `@DeduplicateInflight`
-- `@Authenticate` decorator handles pre-flight auth and 401 re-auth
-- `AuthRestModule` is a NestJS dynamic module with async factory
-- Jest + ts-jest for unit and e2e tests; Stryker v8 for mutation; jest-it-up for coverage ratchet
+- `src/client/hookable-http.service.ts` — abstract base, `HttpVerb`, `InvokeArgs`, `HttpServiceLike`, verb surface
+- `src/client/rest.client.ts` — `RestClient extends HookableHttpService`, overrides `dispatch` with `policy.execute`
+- `src/client/rest.module.ts` — `RestModule.forRootAsync` and `RestModule.forHttpService`
+- `src/client/resailencePolicyBuilder.ts` — composes cockatiel policies from `ResilanceConfig`
+- `src/client/resilance.config.ts` — `ResilanceConfig`, `RetryConfig`, `CircuitBreakerConfig`, etc.
+- `src/auth/auth.config.ts` — `AuthStrategy` interface + `AuthConfig` interface (AuthConfig being REMOVED in next task)
+- `src/auth/auth-strategy.service.ts` — `AuthStrategyService` (being RENAMED to `AuthProcessor` in next task)
+- `src/auth/auth-rest.client.ts` — `AuthRestClient extends HookableHttpService`
+- `src/auth/auth-rest.module.ts` — `AuthRestModule.forRootAsync` dynamic module
+- `src/deduplicate-inflight.decorator.ts` — `@DeduplicateInflight` using `Wrap` from `base-decorators`
+- `src/index.ts` — public API exports
+- `tests/e2e-setup.ts` / `tests/e2e-teardown.ts` — testcontainers httpbin lifecycle
+- `tests/auth-rest-client.e2e.spec.ts`, `tests/rest-client.e2e.spec.ts`, `tests/smoke.e2e.spec.ts` — e2e suites
+- `jest.config.ts`, `jest.e2e.config.ts`, `stryker.config.json` — test configuration files
+- `base-decorators@1.1.0`, `jest@29.7`, `ts-jest@29`, `@types/jest@29`, `jest-it-up`, `@stryker-mutator/*`, `testcontainers` — all installed in devDependencies
 
 ---
 
 ## Key Concepts
 
-- **RestClient**: Renamed from `HttpClient`. Thin wrapper around `HttpService` that runs requests through a cockatiel `IPolicy`. Has a `policy` property read by `@ExecuteWithPolicy`.
-- **@ExecuteWithPolicy**: Method decorator using `Wrap` from `base-decorators`. Reads `this.policy` via `context.target.policy` and executes the request through `policy.execute()`.
-- **AuthRestClient**: Renamed from `AuthenticatedHttpService`. Uses `RestClient` internally, decorated with `@Authenticate`. No direct use of observables, p-retry, or firstValueFrom.
-- **AuthStrategyService**: New service that receives `AuthConfig`. Manages authentication state, exposes `isAuthenticated()`, `authenticateIfNeeded()`, `extendRequest()`. Uses `@DeduplicateInflight` to prevent parallel auth calls.
-- **@Authenticate**: Method decorator using `Wrap` from `base-decorators`. Calls `authenticateIfNeeded()`, extends config arg via `extendRequest()`, and retries on 401.
-- **AuthConfig**: Simplified to a single `authenticate(client: RestClient)` async factory that returns `{ extendRequest, isAuthenticated }`.
-- **AuthRestModule**: Dynamic NestJS module with async factory to build `AuthConfig` + `HttpService`, optional `ResilanceConfig`.
+- **RestClient**: Thin wrapper around `HttpService` that runs requests through a cockatiel `IPolicy`. `policy` field is public readonly. Extends `HookableHttpService`, overrides `dispatch` to wrap with `policy.execute(policyCtx => ...)` and merges `policyCtx.signal` into the axios config.
+- **HookableHttpService**: Abstract base class. Provides the full verb surface (`request`, `get`, `post`, etc.) via a protected `dispatch` template method and `callUnderlying` helper. Subclasses layer cross-cutting concerns by overriding `dispatch`.
+- **AuthRestClient**: Extends `HookableHttpService`. Holds `restClient: RestClient` (as httpService) and `authStrategy: AuthStrategyService` (or `AuthProcessor` after rename). Overrides `dispatch` to run pre-flight auth, extend request config, and recover from a single 401.
+- **AuthStrategyService** (being renamed to **AuthProcessor**): Manages authentication lifecycle. Calls `authConfig.authenticate(client)` to obtain an `AuthStrategy` result object (currently) OR will call `authStrategy.authenticate(client)` directly (after refactor). Uses `@DeduplicateInflight` on `performAuthenticate()` for single-flight guarantee.
+- **AuthConfig** (being REMOVED): Interface wrapping a single `authenticate(client) => Promise<AuthStrategy>` factory. Will be removed — its responsibility moves into the `AuthStrategy` class itself.
+- **AuthStrategy** (interface, being EXPANDED): Currently `{ isAuthenticated(): boolean; extendRequest(config): AxiosRequestConfig }`. After refactor gains `authenticate(client: RestClient): Promise<void>` — making it a full class-based strategy.
+- **AuthRestModule**: Dynamic NestJS module. Currently accepts `{ httpService, authConfig: AuthConfig, resilience? }`. After refactor accepts `{ httpService, authStrategy: Type<AuthStrategy>, resilience? }`.
+- **@DeduplicateInflight**: Method decorator using `Wrap` from `base-decorators`. Coalesces concurrent calls with the same key into a single promise. The decorated class must expose `inflightMap: Map<string, Promise<unknown>>`.
+- **RestModule**: Dynamic NestJS module. `forRootAsync` creates an internal `HttpModule` from axios config. `forHttpService` accepts a pre-resolved `HttpService` (used by `AuthRestModule` to avoid a second axios instance).
 
 ---
 
@@ -74,258 +75,218 @@ This skill documents the architecture of the `nestjs-http-client` library. The l
 
 | Name | Purpose | Status | Notes |
 |------|---------|--------|-------|
-| `base-decorators@1.1.0` | Decorator primitives (Wrap, Effect, hooks) | **MUST INSTALL** | Zero-dep; not in package.json yet |
-| `cockatiel@3.2.1` | Resilience policies (retry, CB, bulkhead, fallback) | Already installed | In package.json dependencies |
-| `axios@^1.14.0` | HTTP client | Already installed | In package.json dependencies |
-| `jest@29.7` | Test runner (unit + e2e) | **MUST INSTALL** | Replace vitest; use ts-jest preset |
-| `ts-jest@29` | TypeScript transformer for Jest | **MUST INSTALL** | Use inline `tsconfig` overrides in jest config transform block |
-| `@types/jest@29` | Type declarations for Jest | **MUST INSTALL** | Required for TS tests |
-| `jest-it-up@4.0.1` | Auto-bump jest coverage thresholds | **MUST INSTALL** | Reads jest.config coverageThreshold |
-| `@stryker-mutator/core@8` | Mutation testing engine | **MUST INSTALL** | v8 compatible with jest@29 |
-| `@stryker-mutator/jest-runner@8` | Jest integration for Stryker | **MUST INSTALL** | Matches jest@29 |
-| `@stryker-mutator/typescript-checker@8` | Type-safe mutation filtering | **MUST INSTALL** | Filters invalid mutants |
-| `testcontainers@11.14.0` | Docker containers for e2e tests | **MUST INSTALL** | GenericContainer for single service |
-| `vitest@^4.0.16` | Current test runner (to be replaced) | **MUST UNINSTALL** | Remove before installing jest |
-| `p-retry@^7.1.1` | Retry library (to be removed from AuthRestClient) | Remove from auth | Still in package.json; not used after refactor |
+| `base-decorators@1.1.0` | Decorator primitives (`Wrap`) | Installed | In package.json dependencies |
+| `cockatiel@3.2.1` | Resilience policies (retry, CB, bulkhead, fallback) | Installed | In package.json dependencies |
+| `axios@^1.14.0` | HTTP client | Installed | In package.json dependencies |
+| `jest@29.7` | Test runner (unit + e2e) | Installed | See jest.config.ts, jest.e2e.config.ts |
+| `ts-jest@29` | TypeScript transformer for Jest | Installed | Uses inline tsconfig overrides |
+| `@types/jest@29` | Type declarations for Jest | Installed | In devDependencies |
+| `jest-it-up@4.0.1` | Auto-bump jest coverage thresholds | Installed | posttest:unit script |
+| `@stryker-mutator/core@8` | Mutation testing engine | Installed | stryker.config.json |
+| `@stryker-mutator/jest-runner@8` | Jest integration for Stryker | Installed | Matches jest@29 |
+| `@stryker-mutator/typescript-checker@8` | Type-safe mutation filtering | Installed | Filters invalid mutants |
+| `testcontainers@11.14.0` | Docker containers for e2e tests | Installed | httpbin container for e2e |
+| `nestjs-log-decorator` | Loggable interface + Logger injection | Installed | Used in RestClient |
 
-### Recommended Stack
+### Installed Stack
 
-Use jest@29 + ts-jest (with inline `tsconfig` overrides in the transform block using `moduleResolution: "node"`) for both unit and e2e tests. Use `jest-it-up` as posttest:unit. Use Stryker v8 (not v9) + jest runner for mutation testing at 80% break threshold. Use `testcontainers` with `GenericContainer` (httpbin or echo-server image) for e2e dummy service.
+jest@29 + ts-jest with inline `tsconfig` overrides (`module: commonjs`, `moduleResolution: node`) in both `jest.config.ts` (unit) and `jest.e2e.config.ts` (e2e). `jest-it-up` runs as `posttest:unit`. Stryker v8 + jest runner with 80% break threshold. testcontainers with `kennethreitz/httpbin` image for e2e.
 
-**IMPORTANT**: The project uses `tsdown` with `moduleResolution: "bundler"` in tsconfig.json. Jest requires CommonJS + `moduleResolution: "node"`. Use inline `tsconfig` overrides in the ts-jest transform block rather than a separate tsconfig file — this avoids maintaining a second tsconfig and keeps the build toolchain (tsdown) unaffected.
+**IMPORTANT**: The project uses `tsdown` with `moduleResolution: "bundler"` in tsconfig.json. Jest requires CommonJS + `moduleResolution: "node"`. Use inline `tsconfig` overrides in the ts-jest transform block — do NOT modify root tsconfig.json for jest compatibility.
 
 ---
 
 ## Patterns & Best Practices
 
-### Pattern 1: @ExecuteWithPolicy Decorator
+### Pattern 1: HookableHttpService + dispatch override
 
-**When to use**: On all request methods in `RestClient`. Decorator reads `this.policy` from the class instance and executes the request through it.
+**When to use**: Layering cross-cutting concerns over the HTTP verb surface. Both `RestClient` and `AuthRestClient` use this pattern.
 
-**Key constraint**: The wrapped method receives the Observable from `HttpService`. Use `firstValueFrom` inside the policy executor.
+**Core mechanics**: `HookableHttpService` maps every verb call to an `InvokeArgs` carrier `{ config, url?, data? }` and routes it through `protected dispatch(verb, args)`. Subclasses override `dispatch` to add "around" behavior. `callUnderlying(verb, args)` invokes the actual transport and normalizes Observable/Promise results.
 
 ```typescript
-import { Wrap } from 'base-decorators'
-import { firstValueFrom } from 'rxjs'
-import type { IPolicy, IDefaultPolicyContext } from 'cockatiel'
-import type { AxiosResponse } from 'axios'
-import type { Observable } from 'rxjs'
-
-const EXECUTE_WITH_POLICY_KEY: unique symbol = Symbol('executeWithPolicy')
-
-// The class using this decorator must have a `policy` property
-function ExecuteWithPolicy() {
-  return Wrap<{ policy: IPolicy<IDefaultPolicyContext> }, any[], Promise<AxiosResponse>>(
-    (method, context) => async (...args) =>
-      await context.target.policy.execute(async () =>
-        await firstValueFrom(method(...args) as Observable<AxiosResponse>)
-      ),
-    EXECUTE_WITH_POLICY_KEY
-  )
+// RestClient: wraps every request in policy.execute
+protected override async dispatch<T>(verb, initialArgs): Promise<AxiosResponse<T>> {
+  return await this.policy.execute(async (policyCtx) => {
+    const argsWithSignal = { ...initialArgs, config: mergeSignal(initialArgs.config, policyCtx.signal) }
+    return await super.dispatch<T>(verb, argsWithSignal)
+  }) as AxiosResponse<T>
 }
-```
 
-Note: `method` in `Wrap` is auto-bound to the current `this` instance — no `.bind()`, `.call()`, or `.apply()` needed.
-
-Usage in RestClient:
-```typescript
-class RestClient {
-  readonly policy: IPolicy<IDefaultPolicyContext>
-
-  @ExecuteWithPolicy()
-  get<T>(url: string, config?: AxiosRequestConfig): Observable<AxiosResponse<T>> {
-    return this.httpService.get<T>(url, config)
+// AuthRestClient: pre-flight auth + 401 re-auth
+protected override async dispatch<T>(verb, initialArgs): Promise<AxiosResponse<T>> {
+  await this.authStrategy.authenticateIfNeeded()
+  const authedArgs = { ...initialArgs, config: this.authStrategy.extendRequest(initialArgs.config) }
+  try {
+    return await super.dispatch<T>(verb, authedArgs)  // delegates to inner RestClient
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 401) {
+      this.authStrategy.clearAuth()
+      await this.authStrategy.authenticateIfNeeded()
+      const retryArgs = { ...initialArgs, config: this.authStrategy.extendRequest(initialArgs.config) }
+      return await this.callUnderlying<T>(verb, retryArgs)  // bypasses pre-flight on retry
+    }
+    throw error
   }
 }
 ```
 
-### Pattern 2: AuthStrategyService with @DeduplicateInflight
+**Key**: `super.dispatch` runs all parent dispatch logic (the resilience pipeline in RestClient). `this.callUnderlying` bypasses all dispatch overrides and goes straight to the transport. Use `callUnderlying` on the 401 retry path to avoid double pre-flight auth.
 
-**When to use**: Managing authentication state with single-flight guarantee on token fetch.
+### Pattern 2: AuthStrategyService / AuthProcessor with @DeduplicateInflight
 
-**Critical constraints**:
-- `@DeduplicateInflight` requires the class to have `inflightMap: Map<string, Promise<unknown>>` as a public property
-- The `KeyBuilder` type used in `DeduplicateInflight` must be defined locally — `./cache.decorator` does NOT exist; define `KeyBuilder` in the same file as `DeduplicateInflight`
-- The key builder for auth must return a constant string
+**Current implementation** (`auth-strategy.service.ts`):
+- Holds `AuthConfig` factory + `client: unknown`. Caches `authResult: AuthStrategy | null`.
+- `performAuthenticate()` calls `authConfig.authenticate(client)` and stores result.
+- `@DeduplicateInflight(() => 'authenticate')` on `performAuthenticate` — single-flight guarantee.
+- Class MUST have `readonly inflightMap = new Map<string, Promise<unknown>>()`.
+
+**Post-refactor (`AuthProcessor`)**:
+- Holds the `AuthStrategy` class INSTANCE (not a factory). No `authResult` caching.
+- `isAuthenticated()` → `authStrategy.isAuthenticated()` directly.
+- `extendRequest()` → `authStrategy.extendRequest()` directly.
+- `performAuthenticate()` → `authStrategy.authenticate(client)` directly.
+- The `AuthStrategy` class manages its own internal session state.
 
 ```typescript
-// In deduplicate-inflight.decorator.ts — define KeyBuilder locally (NOT from ./cache.decorator)
-type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string
-
-interface AuthResult {
-  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig
-  isAuthenticated(): boolean
-}
-
-interface AuthConfig {
-  authenticate(client: RestClient): Promise<AuthResult>
-}
-
+// Current AuthStrategyService (before rename)
 class AuthStrategyService {
   readonly inflightMap = new Map<string, Promise<unknown>>()
-  private authResult: AuthResult | null = null
+  private authResult: AuthStrategy | null = null
 
-  constructor(
-    private readonly authConfig: AuthConfig,
-    private readonly client: RestClient,
-  ) {}
+  constructor(private readonly authConfig: AuthConfig, private readonly client: unknown) {}
 
-  isAuthenticated(): boolean {
-    return this.authResult?.isAuthenticated() ?? false
-  }
-
-  async authenticateIfNeeded(): Promise<void> {
-    if (!this.isAuthenticated()) {
-      await this.performAuthenticate()
-    }
-  }
-
-  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig {
-    if (!this.authResult) throw new Error('Not authenticated')
-    return this.authResult.extendRequest(config)
-  }
+  isAuthenticated() { return this.authResult?.isAuthenticated() ?? false }
+  extendRequest(config) { return this.authResult?.extendRequest(config) ?? config }
+  clearAuth() { this.authResult = null }
 
   @DeduplicateInflight(() => 'authenticate')
-  private async performAuthenticate(): Promise<void> {
-    this.authResult = await this.authConfig.authenticate(this.client)
+  private async performAuthenticate() {
+    this.authResult = await this.authConfig.authenticate(this.client as RestClient)
   }
 }
 ```
 
-### Pattern 3: @Authenticate Decorator
+### Pattern 3: Class-based AuthStrategy DI (pending refactor)
 
-**When to use**: On all request methods in `AuthRestClient`. Calls `authenticateIfNeeded()`, extends config, handles 401 re-auth.
+**Context**: The `improve-auth-rest-client` task replaces the `AuthConfig` factory pattern with a class-based DI pattern for `AuthStrategy`.
 
-**Why Wrap (not Effect/OnInvokeHook)**: `onInvoke` cannot modify method arguments. `Wrap` gives full control over arg modification.
+**New AuthStrategy interface** (gains `authenticate` method):
+```typescript
+interface AuthStrategy {
+  authenticate(client: RestClient): Promise<void>  // NEW — was in AuthConfig
+  isAuthenticated(): boolean
+  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig
+}
+```
 
-**Critical**: The helpers `extendLastConfigArg` and `extendConfigArg` are NOT defined anywhere in the codebase. Define them inline or as local module-level functions in the same file as the decorator. Config arg position differs between methods: `get/delete/head` have config at `args[1]`; `post/put/patch` have config at `args[2]`.
+**New AuthRestModuleOptions** (class reference instead of factory):
+```typescript
+interface AuthRestModuleOptions {
+  httpService: HttpService
+  authStrategy: Type<AuthStrategy>  // Class token, NestJS resolves and instantiates it
+  resilience?: ResilanceConfig<unknown>
+}
+```
+
+**Module wiring change**: `AuthRestModule.forRootAsync` provides the user's `AuthStrategy` class via `useClass` so NestJS DI resolves and injects it into `AuthProcessor`.
+
+**clearAuth() design decision**: Since `AuthProcessor` no longer caches `authResult`, `clearAuth()` must signal the `AuthStrategy` instance to invalidate its internal session. The exact mechanism is a design decision — the `AuthStrategy` class manages its own state, and `clearAuth` on `AuthProcessor` triggers re-authentication on the next `authenticateIfNeeded()` call. One approach: `AuthProcessor` keeps a boolean `_invalidated` flag that overrides `authStrategy.isAuthenticated()` until a fresh `authenticate()` call completes.
+
+### Pattern 4: @DeduplicateInflight decorator implementation
+
+**Source**: `src/deduplicate-inflight.decorator.ts` — uses `Wrap` from `base-decorators`.
 
 ```typescript
-import { Wrap } from 'base-decorators'
-import { isAxiosError, type AxiosRequestConfig } from 'axios'
+// KeyBuilder is defined locally (NOT imported from ./cache.decorator which doesn't exist)
+type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string
 
-const AUTHENTICATE_KEY: unique symbol = Symbol('authenticate')
-
-// Local helper — define in same file as the decorator (NOT imported from elsewhere)
-function extendConfigAtIndex(
-  args: unknown[],
-  index: number,
-  strategy: AuthStrategyService,
-): unknown[] {
-  const extended = [...args]
-  const currentConfig = (extended[index] as AxiosRequestConfig | undefined) ?? {}
-  extended[index] = strategy.extendRequest(currentConfig)
-  return extended
-}
-
-// Map method name to config arg position
-function configArgIndex(propertyKey: string | symbol): number {
-  const twoArgMethods = new Set(['get', 'delete', 'head', 'options', 'request'])
-  return twoArgMethods.has(String(propertyKey)) ? 1 : 2
-}
-
-function Authenticate() {
-  return Wrap<{ authStrategy: AuthStrategyService }, any[], Promise<unknown>>(
+function DeduplicateInflight<TArgs extends unknown[]>(keyBuilder: KeyBuilder<TArgs>): MethodDecorator {
+  return Wrap<{ inflightMap: Map<string, Promise<unknown>> }, TArgs, Promise<unknown>>(
     (method, context) => async (...args) => {
-      await context.target.authStrategy.authenticateIfNeeded()
-      const idx = configArgIndex(context.propertyKey)
-      const extendedArgs = extendConfigAtIndex(args, idx, context.target.authStrategy)
+      const key = keyBuilder(...args)
+      const existing = context.target.inflightMap.get(key)
+      if (existing) return existing
+
+      const promise = method(...args)
+      context.target.inflightMap.set(key, promise)
       try {
-        return await method(...extendedArgs)
-      } catch (error) {
-        if (isAxiosError(error) && error.response?.status === 401) {
-          // Force re-auth and retry once
-          context.target.authStrategy.clearAuth?.()
-          await context.target.authStrategy.authenticateIfNeeded()
-          const retryArgs = extendConfigAtIndex(args, idx, context.target.authStrategy)
-          return await method(...retryArgs)
-        }
-        throw error
+        return await promise
+      } finally {
+        context.target.inflightMap.delete(key)  // always cleanup in finally
       }
     },
-    AUTHENTICATE_KEY
+    INFLIGHT_EXCLUSION_KEY
   )
 }
 ```
 
-### Pattern 4: jest inline tsconfig overrides for bundler-moduleResolution projects
+**Critical**: The decorated class MUST have `readonly inflightMap = new Map<string, Promise<unknown>>()` as a public property. The key builder for auth should return a constant string so all concurrent auth calls share one promise.
 
-**When to use**: Any project where tsconfig.json uses `moduleResolution: "bundler"` (tsdown projects) but you need to run jest.
+### Pattern 5: Static auth via RestClient (no AuthRestModule needed)
 
-**Approach**: Pass compiler overrides directly in the ts-jest `transform` block instead of maintaining a separate tsconfig file. This keeps the root tsconfig unchanged and avoids file proliferation.
+**When to use**: Static API tokens where credentials never change. No authentication lifecycle needed.
 
 ```typescript
-// jest.config.ts
-import type { Config } from 'jest'
-
-const config: Config = {
-  testEnvironment: 'node',
-  transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        // Inline overrides so Jest (CommonJS) can import TypeScript source
-        // without a bundler. The root tsconfig uses moduleResolution:"bundler"
-        // for tsdown; these overrides apply only during test runs.
-        tsconfig: {
-          module: 'commonjs',
-          moduleResolution: 'node',
-          esModuleInterop: true,
-          verbatimModuleSyntax: false,
-          types: ['node', 'jest'],
-          emitDecoratorMetadata: false,
+@Module({
+  imports: [
+    RestModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        axios: {
+          baseURL: 'https://api.example.com',
+          headers: {
+            Authorization: `Bearer ${config.get('API_TOKEN')}`,
+          },
         },
-      },
-    ],
-  },
-  testMatch: ['**/__tests__/**/*.spec.ts'],
-  // ... coverage settings
-}
-module.exports = config
+      }),
+    }),
+  ],
+  exports: [RestClient],
+})
+export class CatalogModule {}
 ```
 
-**Note on `emitDecoratorMetadata: false`**: Disabling this prevents Istanbul from counting `typeof D !== "undefined"` guards emitted for generic method parameters as uncoverable branches, which would otherwise cause coverage to dip below the threshold.
-
-### Pattern 5: AuthRestModule Dynamic Module
-
-**When to use**: Consuming applications register authentication config asynchronously.
-
-```typescript
-@Module({})
-export class AuthRestModule {
-  static forRootAsync(options: {
-    useFactory: (...args: any[]) => Promise<AuthModuleOptions> | AuthModuleOptions
-    inject?: any[]
-    imports?: any[]
-  }): DynamicModule {
-    return {
-      module: AuthRestModule,
-      imports: [...(options.imports ?? [])],
-      providers: [
-        { provide: AUTH_MODULE_OPTIONS, useFactory: options.useFactory, inject: options.inject ?? [] },
-        { provide: RestClient, useFactory: (opts: AuthModuleOptions) => new RestClient(opts.httpService, opts.resilanceConfig), inject: [AUTH_MODULE_OPTIONS] },
-        { provide: AuthStrategyService, useFactory: (opts: AuthModuleOptions, client: RestClient) => new AuthStrategyService(opts.authConfig, client), inject: [AUTH_MODULE_OPTIONS, RestClient] },
-        { provide: AuthRestClient, useFactory: (client: RestClient, strategy: AuthStrategyService) => new AuthRestClient(client, strategy), inject: [RestClient, AuthStrategyService] },
-      ],
-      exports: [AuthRestClient, RestClient],
-    }
-  }
-}
-```
+Use `RestModule` directly. `AuthRestModule` is only needed for dynamic authentication (token refresh, OAuth flows, etc.).
 
 ---
 
-## Similar Implementations
+## Test Patterns
 
-### AuthenticatedHttpService (existing draft — to be replaced)
-- **Source**: `src/auth/authenticated-http.service.ts`
-- **Approach**: Manual authenticate/ensureAuthenticated, p-retry, Observable + firstValueFrom, single-flight via promise field, rigid 4-field AuthConfig (endpoint, requestBuilder, responseExtractor, headerBuilder)
-- **Applicability**: Replaced by AuthRestClient + AuthStrategyService + @Authenticate pattern
+### Unit test: stub both transport and strategy
 
-### HttpClient (existing draft — to be replaced)
-- **Source**: `src/client/http.client.ts`
-- **Approach**: Private `executeRequest()` method wrapping policy.execute + firstValueFrom, `ResilencePresets` enum referenced but not imported
-- **Applicability**: Replaced by RestClient + @ExecuteWithPolicy decorator
+Tests in `src/auth/__tests__/` stub the underlying `RestClient` and `AuthStrategyService` as plain objects with `jest.fn()`. No `@nestjs/testing` needed for unit tests.
+
+```typescript
+// AuthRestClient unit test pattern
+function createRestClientStub(): RestClientStub {
+  const stub = {} as RestClientStub
+  for (const verb of ALL_VERBS) {
+    stub[verb] = jest.fn().mockResolvedValue({ data: 'ok' } as AxiosResponse)
+  }
+  return stub
+}
+const client = new AuthRestClient(restClientStub as unknown as RestClient, authStrategyStub as unknown as AuthStrategyService)
+```
+
+### Unit test: DI module with TestingModule
+
+Tests in `src/auth/__tests__/auth-rest.module.spec.ts` use `@nestjs/testing` to bootstrap the full module and verify DI wiring:
+
+```typescript
+const moduleRef = await Test.createTestingModule({
+  imports: [AuthRestModule.forRootAsync({ useFactory: () => ({ httpService, authConfig }) })],
+}).compile()
+const authRestClient = moduleRef.get(AuthRestClient)
+const restClient = moduleRef.get(RestClient)
+// Verify single-source-of-truth: same RestClient instance
+expect(authRestClient.restClient).toBe(restClient)
+```
+
+### E2e test: httpbin container
+
+E2e specs in `tests/` receive `process.env.TEST_HTTP_BASE_URL` from `tests/e2e-setup.ts` (globalSetup). Use `HttpService` + `axios.create({ baseURL })` for real HTTP calls. Container is `kennethreitz/httpbin` via testcontainers.
 
 ---
 
@@ -333,286 +294,75 @@ export class AuthRestModule {
 
 | Issue | Impact | Solution |
 |-------|--------|----------|
-| **`base-decorators` NOT in package.json** | Critical | Run `npm install base-decorators@1.1.0` before any decorator work; it is NOT yet a dependency |
-| **`./cache.decorator` does not exist** | Critical | The file `src/deduplicate-inflight.decorator.ts` imports `KeyBuilder` from `./cache.decorator` which is missing. Create `./cache.decorator.ts` with `export type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string`, OR define `KeyBuilder` locally in `deduplicate-inflight.decorator.ts` and remove the import |
-| **`@/cache` path alias not configured** | Critical | `tsconfig.json` has no `paths` field. `src/deduplicate-inflight.decorator.spec.ts` imports from `@/cache/deduplicate-inflight.decorator`. Either add `paths: { "@/*": ["src/*"] }` to tsconfig.json (the inline jest transform picks up paths from the root tsconfig), OR change import to a relative path |
-| **`vitest` must be removed before jest** | High | `vitest@^4.0.16` is currently installed. Run `npm uninstall vitest` before installing jest to avoid conflicts. The `test` script in package.json currently calls vitest |
-| **`tests/index.test.ts` imports `fn` from `'../src'`** | High | `fn` is not exported from `src/index.ts`. Delete or replace this file — it is a vitest smoke test left over from project scaffolding and has no relationship to the actual library |
-| **`extendLastConfigArg` / `extendConfigArg` are undefined** | Critical | These helpers are called in Pattern 3 (@Authenticate) but are never defined anywhere in the codebase. Define inline config-extension logic within the decorator factory as shown in Pattern 3 above |
-| **`moduleResolution: "bundler"` breaks jest** | High | Add inline `tsconfig` overrides in the ts-jest `transform` block with `"module": "commonjs"` and `"moduleResolution": "node"` — no separate tsconfig file needed |
-| **`context.target` type not narrowed** | Medium | Type the `Wrap` generic: `Wrap<{ policy: IPolicy }>` |
-| **DeduplicateInflight requires `inflightMap` property** | High | Always declare `readonly inflightMap = new Map<string, Promise<unknown>>()` on the class |
-| **Policy.execute expects synchronous return in some versions** | Medium | Always `await` inside execute callback; use `firstValueFrom` to unwrap Observables |
-| **jest-it-up runs after e2e tests too** | Medium | Name script `posttest:unit` not `posttest` to scope it to unit tests only |
-| **Stryker v9 may not support jest@29** | Medium | Use Stryker v8 with jest@29 (documented working combo) |
-| **Double-wrapping when using multiple Wrap decorators** | Medium | Use unique `exclusionKey` symbol for each decorator to avoid conflicts |
-| **`method` in Wrap is already bound** | Low | Do NOT call `method.bind(this)` — base-decorators auto-binds `method` to the current `this` on every invocation |
+| **`moduleResolution: "bundler"` breaks jest** | High | Use inline `tsconfig` overrides in ts-jest transform block: `module: commonjs, moduleResolution: node`. Never modify root tsconfig.json for jest |
+| **`emitDecoratorMetadata: true` inflates branch coverage** | Medium | Keep `emitDecoratorMetadata: false` in jest tsconfig inline override |
+| **DeduplicateInflight requires `inflightMap` property** | Critical | Declare `readonly inflightMap = new Map<string, Promise<unknown>>()` on decorated class |
+| **`callUnderlying` vs `super.dispatch` on 401 retry** | High | Use `callUnderlying` on 401 retry to skip pre-flight auth; use `super.dispatch` for normal calls that should go through the full pipeline |
+| **AuthRestClient `authStrategy` field must be public** | High | Module wiring, tests, and adapters read `client.authStrategy` directly |
+| **Single-source-of-truth RestClient** | High | `AuthRestClient.restClient` must return the same `RestClient` instance that `AuthRestModule` provides — never create a second instance |
+| **`@DeduplicateInflight` key must be constant for auth** | High | Use `() => 'authenticate'` so all concurrent auth calls share one promise |
+| **AuthRestClient dispatch: original config for 401 retry** | High | Re-extend from `initialArgs.config` (not from the already-extended `authedArgs.config`) so stale headers are fully replaced |
+| **Wrap `method` is already bound** | Low | Do NOT call `method.bind(this)` — base-decorators auto-binds per invocation |
+| **clearAuth() in post-refactor AuthProcessor** | Medium | AuthStrategy class must manage its own session state; AuthProcessor.clearAuth() must trigger re-auth without an `authResult` field to null |
 
 ---
 
 ## Recommendations
 
-1. **Install `base-decorators@1.1.0` first** — it is not in `package.json` yet; all decorator patterns depend on it.
-2. **Fix `./cache.decorator` import immediately** — `deduplicate-inflight.decorator.ts` will not compile until this missing file is created or the import is replaced with a local type definition.
-3. **Use `Wrap` for any decorator that modifies arguments or needs full execution control** — `Effect`/`OnInvokeHook` cannot modify args; `Wrap` is the only primitive that allows replacing what is passed to the original method.
-4. **Always pass `exclusionKey` to `Wrap`** — prevents double-wrapping conflicts when multiple `Wrap`-based decorators (`@ExecuteWithPolicy`, `@DeduplicateInflight`, `@Authenticate`) are applied to the same class.
-5. **Use inline tsconfig overrides in the ts-jest transform block** — never modify the root `tsconfig.json` for jest compatibility; the build toolchain (tsdown) depends on `moduleResolution: "bundler"`. Pass overrides directly in the `transform` config so no extra tsconfig file is needed.
-6. **Use Stryker v8 + jest@29** — Stryker v9 may require jest@30.
-7. **DeduplicateInflight on `performAuthenticate` not `authenticateIfNeeded`** — the public `authenticateIfNeeded` checks state first; the decorated private method is the actual network call that should be deduplicated.
+1. **Use `dispatch` override pattern for cross-cutting concerns** — `AuthRestClient` and `RestClient` both override `dispatch`; this is the correct extension point, not method decorators on individual verbs.
+2. **Apply `@DeduplicateInflight` on `performAuthenticate`, not `authenticateIfNeeded`** — the public method checks state first; the decorated private method is the network call that should be single-flighted.
+3. **Use inline tsconfig overrides in ts-jest transform block** — never touch the root tsconfig for jest compatibility; tsdown requires `moduleResolution: bundler`.
+4. **Treat `InvokeArgs` as immutable** — always produce a new object via spread before forwarding to `callUnderlying` or `super.dispatch`; retry paths depend on the pristine original.
+5. **Always declare `readonly inflightMap` on `@DeduplicateInflight` users** — the decorator reads it via `context.target.inflightMap`; missing this causes a runtime error.
+6. **Use `Type<AuthStrategy>` in `AuthRestModuleOptions`** (post-refactor) — NestJS resolves and instantiates the class via DI; do not instantiate it manually in the factory.
 
 ---
 
 ## Implementation Guidance
 
-### Prerequisites: Must Install
-
-```bash
-# 1. Install base-decorators (NOT currently in package.json)
-npm install base-decorators@1.1.0
-
-# 2. Remove vitest (currently installed, conflicts with jest)
-npm uninstall vitest
-
-# 3. Install jest + ts-jest
-npm install --save-dev jest@29.7.0 ts-jest@29.2.0 @types/jest@29.5.0
-
-# 4. Install jest-it-up
-npm install --save-dev jest-it-up@4.0.1
-
-# 5. Install Stryker (v8 for jest@29 compatibility)
-npm install --save-dev @stryker-mutator/core@8 @stryker-mutator/jest-runner@8 @stryker-mutator/typescript-checker@8
-
-# 6. Install testcontainers for e2e
-npm install --save-dev testcontainers@11.14.0
-```
-
-### Fix Broken Imports Before Implementing
-
-```bash
-# Option A: Create missing cache.decorator.ts file
-# Create src/cache.decorator.ts with:
-# export type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string
-
-# Option B (preferred): Remove the import and define KeyBuilder locally
-# In src/deduplicate-inflight.decorator.ts:
-# Replace: import { KeyBuilder } from './cache.decorator'
-# With:    type KeyBuilder<TArgs extends unknown[]> = (...args: TArgs) => string
-
-# Fix path alias in tsconfig.json (add paths field):
-# "paths": { "@/*": ["src/*"] }
-# The inline jest transform picks up paths from the root tsconfig automatically
-
-# Delete broken vitest smoke test:
-# rm tests/index.test.ts
-```
-
-### Package.json Scripts
-
-```json
-{
-  "scripts": {
-    "test:unit": "jest --config jest.config.ts",
-    "posttest:unit": "jest-it-up",
-    "test:e2e": "jest --config jest.e2e.config.ts",
-    "test:mutation": "stryker run",
-    "test": "npm run test:unit && npm run test:e2e && npm run test:mutation"
-  }
-}
-```
-
-### Configuration Files
-
-**jest.config.ts** (unit tests):
-```typescript
-import type { Config } from 'jest'
-
-// Use `module.exports =` (not `export default`) so jest-it-up can load this
-// file via Node's `require()` — Node's strip-only TS loader rejects `export =`.
-const config: Config = {
-  testEnvironment: 'node',
-  transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        // Inline overrides: Jest needs CommonJS + node moduleResolution.
-        // Root tsconfig uses moduleResolution:"bundler" for tsdown builds.
-        tsconfig: {
-          module: 'commonjs',
-          moduleResolution: 'node',
-          esModuleInterop: true,
-          verbatimModuleSyntax: false,
-          types: ['node', 'jest'],
-          emitDecoratorMetadata: false,
-        },
-      },
-    ],
-  },
-  testMatch: ['**/src/**/__tests__/**/*.spec.ts'],
-  collectCoverageFrom: ['src/**/*.ts', '!src/**/__tests__/**', '!src/index.ts'],
-  coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov', 'html', 'json-summary'],
-  coverageProvider: 'v8',
-  coverageThreshold: {
-    global: { branches: 80, functions: 80, lines: 80, statements: 80 },
-  },
-}
-module.exports = config
-```
-
-**jest.e2e.config.ts** (e2e tests):
-```typescript
-import type { Config } from 'jest'
-
-const config: Config = {
-  testEnvironment: 'node',
-  transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        tsconfig: {
-          module: 'commonjs',
-          moduleResolution: 'node',
-          esModuleInterop: true,
-          verbatimModuleSyntax: false,
-          types: ['node', 'jest'],
-          emitDecoratorMetadata: false,
-        },
-      },
-    ],
-  },
-  testMatch: ['**/tests/**/*.spec.ts'],
-  testTimeout: 60000,
-}
-module.exports = config
-```
-
-**stryker.config.json**:
-```json
-{
-  "testRunner": "jest",
-  "coverageAnalysis": "perTest",
-  "jest": { "projectType": "custom", "configFile": "jest.config.ts" },
-  "checkers": ["typescript"],
-  "tsconfigFile": "tsconfig.json",
-  "mutate": ["src/**/*.ts", "!src/**/__tests__/**/*.ts", "!src/index.ts"],
-  "reporters": ["html", "text", "progress"],
-  "thresholds": { "high": 80, "low": 60, "break": 80 }
-}
-```
-
 ### Integration Points
 
-- `RestClient` has `policy: IPolicy` property that `@ExecuteWithPolicy` reads via `context.target.policy`
-- `AuthRestClient` has `authStrategy: AuthStrategyService` property that `@Authenticate` reads via `context.target.authStrategy`
-- `AuthStrategyService` has `inflightMap: Map<string, Promise<unknown>>` required by `@DeduplicateInflight`
-- `AuthConfig.authenticate(client)` receives the `RestClient` so it can make auth requests through the resilience policy
+- `RestClient.policy` — `IPolicy<IDefaultPolicyContext, any>`, built in constructor from `ResilanceConfig`
+- `AuthRestClient.authStrategy` — public readonly field; read by module wiring, tests, and adapters
+- `AuthRestClient.restClient` — getter returning `this.httpService as RestClient`; used for single-source-of-truth verification
+- `AuthStrategyService.inflightMap` — public `Map<string, Promise<unknown>>`; required by `@DeduplicateInflight`
+- `AuthRestModule` re-exports `RestModule` (not `RestClient` directly) so consumers get the canonical RestClient provider without a second instance
 
----
+### File Structure (auth module)
 
-## Code Examples
-
-### Example 1: Complete RestClient skeleton
-
-```typescript
-import { firstValueFrom } from 'rxjs'
-import { Wrap } from 'base-decorators'
-import type { IPolicy, IDefaultPolicyContext } from 'cockatiel'
-import type { AxiosRequestConfig, AxiosResponse } from 'axios'
-import type { HttpService } from '@nestjs/axios'
-import { resiliencePolicyPresets, ResilencePresets } from '../resilence.policy'
-import { resiliencePolicyBuilder } from './resailencePolicyBuilder'
-import type { ResilanceConfig } from './resilance.config'
-
-const EXECUTE_WITH_POLICY_KEY: unique symbol = Symbol('executeWithPolicy')
-
-function ExecuteWithPolicy() {
-  return Wrap<RestClient, any[], Promise<AxiosResponse>>(
-    (method, ctx) => async (...args) =>
-      ctx.target.policy.execute(async () => await firstValueFrom(method(...args))),
-    EXECUTE_WITH_POLICY_KEY
-  )
-}
-
-export class RestClient {
-  readonly policy: IPolicy<IDefaultPolicyContext>
-
-  constructor(
-    private readonly httpService: HttpService,
-    config: ResilanceConfig = resiliencePolicyPresets[ResilencePresets.CONSERVATIVE],
-  ) {
-    this.policy = resiliencePolicyBuilder(config)
-  }
-
-  @ExecuteWithPolicy()
-  get<T>(url: string, config?: AxiosRequestConfig) {
-    return this.httpService.get<T>(url, config)
-  }
-
-  @ExecuteWithPolicy()
-  post<T, D>(url: string, data?: D, config?: AxiosRequestConfig<D>) {
-    return this.httpService.post<T, AxiosResponse<T>, D>(url, data, config)
-  }
-}
+```
+src/auth/
+  auth.config.ts          # AuthStrategy interface (AuthConfig removed in refactor)
+  auth-strategy.service.ts # Renamed to auth-processor.ts in refactor
+  auth-rest.client.ts     # AuthRestClient extends HookableHttpService
+  auth-rest.module.ts     # AuthRestModule.forRootAsync
+  __tests__/
+    auth-strategy.service.spec.ts  # Renamed to auth-processor.spec.ts in refactor
+    auth-rest.client.spec.ts
+    auth-rest.module.spec.ts
+tests/
+  auth-rest-client.e2e.spec.ts
+  rest-client.e2e.spec.ts
+  smoke.e2e.spec.ts
+  e2e-setup.ts            # globalSetup: starts httpbin container
+  e2e-teardown.ts         # globalTeardown: stops container
 ```
 
-### Example 2: E2e globalSetup with httpbin
+### Pending Refactor: improve-auth-rest-client
 
-```typescript
-// tests/global-setup.ts
-import { GenericContainer, Wait } from 'testcontainers'
-import type { StartedTestContainer } from 'testcontainers'
+The following changes are required by task `improve-auth-rest-client`:
 
-let container: StartedTestContainer
-
-export async function setup(): Promise<void> {
-  container = await new GenericContainer('kennethreitz/httpbin')
-    .withExposedPorts(80)
-    .withWaitStrategy(Wait.forHttp('/get', 80).forStatusCode(200))
-    .start()
-
-  process.env.TEST_HTTP_BASE_URL = `http://${container.getHost()}:${container.getMappedPort(80)}`
-}
-
-export async function teardown(): Promise<void> {
-  await container?.stop()
-}
-```
-
-### Example 3: Unit test with constructor injection (no import mocking)
-
-```typescript
-// src/client/__tests__/rest.client.spec.ts
-import { RestClient } from '../rest.client'
-import type { IPolicy, IDefaultPolicyContext } from 'cockatiel'
-import { of } from 'rxjs'
-
-const mockHttpService = {
-  get: jest.fn().mockReturnValue(of({ data: 'test', status: 200 })),
-  post: jest.fn(),
-}
-
-const mockPolicy: IPolicy<IDefaultPolicyContext> = {
-  execute: jest.fn(fn => fn({ signal: new AbortController().signal })),
-  onSuccess: jest.fn(),
-  onFailure: jest.fn(),
-}
-
-describe('RestClient', () => {
-  let client: RestClient
-
-  beforeEach(() => {
-    jest.clearAllMocks()
-    client = new RestClient(mockHttpService as any, mockPolicy as any)
-  })
-
-  it('executes GET through policy', async () => {
-    const result = await client.get('/test')
-    expect(mockPolicy.execute).toHaveBeenCalled()
-    expect(mockHttpService.get).toHaveBeenCalledWith('/test', undefined)
-    expect(result.data).toBe('test')
-  })
-})
-```
+| Change | Details |
+|--------|---------|
+| Remove `AuthConfig` interface | Delete from `auth.config.ts`; update `auth-rest.module.ts` and tests |
+| Rename `AuthStrategyService` → `AuthProcessor` | Rename file, class, all imports |
+| Expand `AuthStrategy` interface | Add `authenticate(client: RestClient): Promise<void>` method |
+| Update `AuthProcessor` | Remove `authResult` caching; call `AuthStrategy` methods directly |
+| Update `AuthRestModuleOptions` | Replace `authConfig: AuthConfig` with `authStrategy: Type<AuthStrategy>` |
+| Update `src/index.ts` | Export `AuthProcessor` instead of `AuthStrategyService`; remove `AuthConfig` type export |
+| Add static auth e2e test | Test `RestClient` with static `Authorization` header via axios config |
+| Update README | New API docs + static auth example + note about dynamic vs static auth |
+| Add JSDoc | Usage examples on all classes and methods |
 
 ---
 
@@ -620,19 +370,22 @@ describe('RestClient', () => {
 
 | Source | Type | Last Verified |
 |--------|------|---------------|
-| https://github.com/NeoLabHQ/base-decorators (npm tarball extracted) | Official | 2026-04-26 |
-| https://www.npmjs.com/package/base-decorators | Registry | 2026-04-26 |
+| src/client/hookable-http.service.ts | Internal (verified) | 2026-04-30 |
+| src/client/rest.client.ts | Internal (verified) | 2026-04-30 |
+| src/auth/auth.config.ts | Internal (verified) | 2026-04-30 |
+| src/auth/auth-strategy.service.ts | Internal (verified) | 2026-04-30 |
+| src/auth/auth-rest.client.ts | Internal (verified) | 2026-04-30 |
+| src/auth/auth-rest.module.ts | Internal (verified) | 2026-04-30 |
+| src/deduplicate-inflight.decorator.ts | Internal (verified) | 2026-04-30 |
+| src/index.ts | Internal (verified) | 2026-04-30 |
+| tests/auth-rest-client.e2e.spec.ts | Internal (verified) | 2026-04-30 |
+| tests/rest-client.e2e.spec.ts | Internal (verified) | 2026-04-30 |
+| package.json (all deps verified present) | Internal | 2026-04-30 |
+| https://github.com/NeoLabHQ/base-decorators | Official | 2026-04-26 |
 | https://github.com/connor4312/cockatiel | Official | 2026-04-26 |
 | https://jestjs.io/docs/configuration | Official | 2026-04-26 |
-| https://stryker-mutator.io/docs/stryker-js/jest-runner/ | Official | 2026-04-26 |
 | https://node.testcontainers.org | Official | 2026-04-26 |
-| src/deduplicate-inflight.decorator.ts (local codebase — broken) | Internal | 2026-04-26 |
-| src/client/http.client.ts (local codebase — to be replaced) | Internal | 2026-04-26 |
-| src/auth/authenticated-http.service.ts (local codebase — to be replaced) | Internal | 2026-04-26 |
-| package.json (local — confirmed base-decorators NOT present) | Internal | 2026-04-26 |
-| node_modules inspection (confirmed base-decorators NOT installed) | Internal | 2026-04-26 |
-| /tmp/base-decorators-1.1.0.tgz (npm pack — verified exports + types) | Official | 2026-04-26 |
-| .claude/skills/nestjs-jest-testing/SKILL.md | Internal skill | 2026-04-26 |
+| .specs/tasks/draft/improve-auth-rest-client.feature.md | Task file | 2026-04-30 |
 
 ---
 
@@ -641,4 +394,5 @@ describe('RestClient', () => {
 | Date | Changes |
 |------|---------|
 | 2026-04-26 | Initial creation for task: complete-initial-feature-set |
-| 2026-04-26 | Major update: added Current State vs Target State section; fixed base-decorators NOT installed (was falsely described as a dependency); added pitfall for missing ./cache.decorator; fixed @Authenticate pattern to remove undefined helpers (extendLastConfigArg/extendConfigArg) and replace with inline logic; added pitfalls for missing @/cache path alias, vitest removal requirement, broken tests/index.test.ts; clarified installed vs must-install in library table; verified all claims from source inspection and npm pack |
+| 2026-04-26 | Major update: corrected installed vs missing packages, fixed broken import pitfalls, verified from source inspection |
+| 2026-04-30 | Major update for task: improve-auth-rest-client — rewrote "Current State vs Target State" to reflect fully implemented codebase; replaced all outdated patterns with actual implemented dispatch override pattern; removed stale @ExecuteWithPolicy/@Authenticate decorator patterns (not implemented that way); updated library table to reflect all packages now installed; added class-based AuthStrategy DI pattern (pending refactor); added pending refactor change table; added static auth via RestClient pattern; updated sources to reflect direct file inspection |

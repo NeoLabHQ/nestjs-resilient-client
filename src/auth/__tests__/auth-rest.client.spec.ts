@@ -1,7 +1,7 @@
 import type { AxiosRequestConfig, AxiosResponse } from 'axios'
 
 import type { RestClient } from '../../client/rest.client'
-import type { AuthStrategyService } from '../auth-strategy.service'
+import type { AuthProcessor } from '../auth-processor'
 import { AuthRestClient } from '../auth-rest.client'
 
 /**
@@ -103,19 +103,19 @@ function buildSut(): {
   const authStrategy = createAuthStrategyStub()
   const client = new AuthRestClient(
     restClient as unknown as RestClient,
-    authStrategy as unknown as AuthStrategyService,
+    authStrategy as unknown as AuthProcessor,
   )
   return { client, restClient, authStrategy }
 }
 
 describe('AuthRestClient', () => {
   describe('constructor and field visibility', () => {
-    it('exposes authStrategy as a public-readable field', () => {
+    it('exposes authProcessor as a public-readable field', () => {
       const { client, authStrategy } = buildSut()
 
-      // Module wiring and adapters read `client.authStrategy` directly, so
+      // Module wiring and adapters read `client.authProcessor` directly, so
       // the field MUST be public-readable on the instance.
-      expect(client.authStrategy).toBe(authStrategy)
+      expect(client.authProcessor).toBe(authStrategy)
     })
   })
 

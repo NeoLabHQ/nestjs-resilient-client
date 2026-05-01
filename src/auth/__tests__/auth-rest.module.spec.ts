@@ -1,15 +1,17 @@
 import type { HttpService } from '@nestjs/axios'
+import { Inject, Injectable, Module } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { TestingModule } from '@nestjs/testing'
-import type { AxiosError, AxiosResponse } from 'axios'
+import type { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios'
 import { CircuitBreakerPolicy, RetryPolicy, TimeoutPolicy } from 'cockatiel'
 import { of, throwError } from 'rxjs'
 
 import { RestClient } from '../../client/rest.client'
 import type { ResilanceConfig } from '../../client/resilance.config'
+import { AuthProcessor } from '../auth-processor'
 import { AuthRestClient } from '../auth-rest.client'
 import { AuthRestModule } from '../auth-rest.module'
-import type { AuthConfig, AuthStrategy } from '../auth.config'
+import type { AuthStrategy } from '../auth.config'
 
 /**
  * Minimal `HttpService`-shaped stub. Mirrors the shape used by
@@ -54,6 +56,34 @@ function buildHttpServiceStub(response: AxiosResponse): HttpServiceStub {
   }
 }
 
+// ── Sentinel DI infrastructure ────────────────────────────────────────────────
+
+const SENTINEL_TOKEN = 'SENTINEL'
+const SENTINEL_VALUE = 'sentinel-value'
+
+// Strategy class whose constructor receives a dependency via `@Inject`. Placed
+// at file scope so TypeScript can emit the parameter-decorator metadata (the
+// Language Server reads tsconfig.spec.json which includes these test files and
+// enables experimentalDecorators via the base tsconfig.json).
+@Injectable()
+class StrategyWithDeps implements AuthStrategy {
+  constructor(@Inject(SENTINEL_TOKEN) public readonly sentinel: string) {}
+  async authenticate(_client: RestClient): Promise<void> {}
+  isAuthenticated(): boolean { return true }
+  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig { return config }
+  invalidate(): void {}
+}
+
+// Wraps the sentinel in its own NestJS module so it can be imported into
+// `AuthRestModule`'s DI scope via `forRootAsync({ imports: [SentinelModule] })`.
+@Module({
+  providers: [{ provide: SENTINEL_TOKEN, useValue: SENTINEL_VALUE }],
+  exports: [SENTINEL_TOKEN],
+})
+class SentinelModule {}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 /**
  * Builds an axios-shaped error fixture matching the structure
  * `isAxiosError(err)` expects. The CONSERVATIVE preset's `shouldRetry`
@@ -75,22 +105,35 @@ function makeAxiosError(method: string, status: number): AxiosError {
 }
 
 /**
- * Builds a synchronous {@link AuthStrategy} stub. The module spec only
- * needs the strategy to satisfy the `AuthConfig.authenticate` contract;
- * it does not exercise auth flows (those are covered by
- * `auth-rest.client.spec.ts` and `auth-strategy.service.spec.ts`).
+ * Class-based {@link AuthStrategy} stub. Under the module wiring,
+ * `AuthRestModule.forRootAsync({ authStrategy })` registers the strategy
+ * via `useClass` self-binding, so the test must hand it a *class token*
+ * rather than a pre-built instance.
+ *
+ * The module spec only needs the strategy to satisfy the contract surface
+ * so the wiring chain compiles — actual auth flows are covered by
+ * `auth-rest.client.spec.ts` and `auth-processor.spec.ts`. The
+ * `@Injectable()` decorator is mandatory: NestJS requires constructor
+ * parameter metadata for `useClass` self-binding to work, even on a
+ * parameterless constructor (defensive — guarantees the registration
+ * pattern works the same when consumers add deps later).
  */
-function createAuthStrategyStub(): AuthStrategy {
-  return {
-    isAuthenticated: jest.fn().mockReturnValue(true),
-    extendRequest: jest.fn((config) => config),
+@Injectable()
+class StubAuthStrategy implements AuthStrategy {
+  async authenticate(_client: RestClient): Promise<void> {
+    // no-op; the module spec does not exercise auth flows
   }
-}
 
-/** Builds a fresh {@link AuthConfig} stub whose `authenticate` resolves to a stub strategy. */
-function createAuthConfigStub(): AuthConfig {
-  return {
-    authenticate: jest.fn().mockResolvedValue(createAuthStrategyStub()),
+  isAuthenticated(): boolean {
+    return true
+  }
+
+  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig {
+    return config
+  }
+
+  invalidate(): void {
+    // no-op; the module spec does not exercise invalidation
   }
 }
 
@@ -106,6 +149,11 @@ const successResponse: AxiosResponse = {
  * Bootstrap helper. Compiles a {@link TestingModule} with the supplied
  * factory output and returns the module + its resolved instances. Centralised
  * so individual test cases stay focused on assertions rather than wiring.
+ *
+ * The new options shape splits the synchronous strategy-class token
+ * (`authStrategy`) from the async runtime data (`useFactory`); the helper
+ * always passes {@link StubAuthStrategy} as the class token so the
+ * `useClass` self-binding path is exercised on every bootstrap.
  */
 async function bootstrap(opts: {
   httpService: HttpServiceStub
@@ -118,9 +166,9 @@ async function bootstrap(opts: {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AuthRestModule.forRootAsync({
+        authStrategy: StubAuthStrategy,
         useFactory: () => ({
           httpService: opts.httpService as unknown as HttpService,
-          authConfig: createAuthConfigStub(),
           // Spreading `undefined` would still set the property; only attach
           // `resilience` when the caller explicitly supplied one so the
           // "factory omits resilience" branch in `AuthRestModule` is
@@ -140,12 +188,12 @@ async function bootstrap(opts: {
 
 describe('AuthRestModule.forRootAsync', () => {
   describe('bootstrap and resolution', () => {
-    it('compiles a TestingModule with useFactory returning httpService + authConfig without throwing', async () => {
+    it('compiles a TestingModule with useFactory returning httpService + resilience without throwing', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       // Bootstrap is the assertion target — `compile()` would throw if any
       // provider in the wiring chain (AUTH_MODULE_OPTIONS -> RestClient ->
-      // AuthStrategyService -> AuthRestClient) failed to resolve.
+      // StubAuthStrategy -> AuthProcessor -> AuthRestClient) failed to resolve.
       await expect(bootstrap({ httpService: stubHttp })).resolves.toBeDefined()
     })
 
@@ -175,6 +223,48 @@ describe('AuthRestModule.forRootAsync', () => {
       // circuit-breaker / bulkhead state." Verifying object identity here
       // guards that invariant against silent regressions.
       expect((authRestClient as unknown as { restClient: RestClient }).restClient).toBe(restClient)
+    })
+
+    it('AuthRestClient is composed with an AuthProcessor instance (post-rename invariant)', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+
+      const { authRestClient } = await bootstrap({ httpService: stubHttp })
+
+      // Field rename invariant: the legacy `authStrategy` collaborator was
+      // replaced by `authProcessor` (an `AuthProcessor` instance). This
+      // assertion fixes the wiring contract so future refactors that drop
+      // the field, rename it, or wire the wrong class are caught here.
+      expect((authRestClient as unknown as { authProcessor: AuthProcessor }).authProcessor)
+        .toBeInstanceOf(AuthProcessor)
+    })
+  })
+
+  describe('strategy DI integration', () => {
+    it('instantiates the strategy class via the DI container with access to other providers', async () => {
+      // StrategyWithDeps / SentinelModule / SentinelDep are declared at
+      // file scope above. The test imports them directly.
+      const stubHttp = buildHttpServiceStub(successResponse)
+
+      const moduleRef = await Test.createTestingModule({
+        imports: [
+          AuthRestModule.forRootAsync({
+            authStrategy: StrategyWithDeps,
+            imports: [SentinelModule],
+            useFactory: () => ({
+              httpService: stubHttp as unknown as HttpService,
+            }),
+          }),
+        ],
+      }).compile()
+
+      // The crux of the assertion: resolving the strategy class returns an
+      // instance whose constructor-injected `dep` carries the registered
+      // SentinelDep. If the module registered the strategy with a pattern
+      // that bypassed DI (e.g. `useValue: new StrategyWithDeps()`, which
+      // would explode with no constructor args), this would fail.
+      const strategyInstance = moduleRef.get(StrategyWithDeps)
+      expect(strategyInstance).toBeInstanceOf(StrategyWithDeps)
+      expect(strategyInstance.sentinel).toBe(SENTINEL_VALUE)
     })
   })
 

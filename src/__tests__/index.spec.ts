@@ -4,9 +4,8 @@ import { HookableHttpService } from '../client/hookable-http.service'
 import { RestClient } from '../client/rest.client'
 import { RestModule } from '../client/rest.module'
 import { AuthRestClient } from '../auth/auth-rest.client'
-import { AuthStrategyService } from '../auth/auth-strategy.service'
+import { AuthProcessor } from '../auth/auth-processor'
 import { AuthRestModule } from '../auth/auth-rest.module'
-import { DeduplicateInflight } from '../deduplicate-inflight.decorator'
 import {
   ResilencePresets as DirectResilencePresets,
   resiliencePolicyPresets as directResiliencePolicyPresets,
@@ -18,9 +17,9 @@ import {
  * silent-but-deadly regression because `tsdown` happily bundles whatever the
  * barrel exposes.
  *
- * This spec pins both the runtime symbols (classes + decorator factories +
- * the preset enum/lookup) and the type-only re-exports (which obviously
- * vanish at runtime but are validated by the compile step).
+ * This spec pins both the runtime symbols (classes + the preset enum/lookup)
+ * and the type-only re-exports (which obviously vanish at runtime but are
+ * validated by the compile step).
  */
 describe('public surface (src/index.ts)', () => {
   describe('runtime class re-exports', () => {
@@ -36,8 +35,8 @@ describe('public surface (src/index.ts)', () => {
       expect(publicSurface.AuthRestClient).toBe(AuthRestClient)
     })
 
-    it('exports the AuthStrategyService class identical to the source class', () => {
-      expect(publicSurface.AuthStrategyService).toBe(AuthStrategyService)
+    it('exports the AuthProcessor class identical to the source class', () => {
+      expect(publicSurface.AuthProcessor).toBe(AuthProcessor)
     })
 
     it('exports the AuthRestModule class identical to the source class', () => {
@@ -49,9 +48,12 @@ describe('public surface (src/index.ts)', () => {
     })
   })
 
-  describe('decorator factory re-exports', () => {
-    it('exports the DeduplicateInflight decorator identical to the source factory', () => {
-      expect(publicSurface.DeduplicateInflight).toBe(DeduplicateInflight)
+  describe('module token re-exports', () => {
+    it('exports the REST_MODULE_OPTIONS symbol from the rest module', () => {
+      // REST_MODULE_OPTIONS is the documented DI token consumers use to inject
+      // raw RestModule options for diagnostics / test fixtures. Pinning the
+      // identity prevents accidental shadowing across re-exports.
+      expect(typeof publicSurface.REST_MODULE_OPTIONS).toBe('symbol')
     })
   })
 
@@ -78,18 +80,18 @@ describe('public surface (src/index.ts)', () => {
 
   describe('exhaustive named export list', () => {
     it('exports exactly the runtime + enum + lookup symbols documented in README', () => {
-      // Type-only exports (AuthConfig, AuthStrategy, ResilanceConfig,
-      // HttpVerb, InvokeArgs, etc.) are erased at runtime; the runtime
-      // keys must therefore be exactly the symbols below. Drift here is a public-API
-      // change.
+      // Type-only exports (AuthStrategy, ResilanceConfig, HttpVerb, InvokeArgs,
+      // RestModuleOptions, RestFromHttpServiceOptions, etc.) are erased at
+      // runtime; the runtime keys must therefore be exactly the symbols below.
+      // Drift here is a public-API change.
       const actualKeys = Object.keys(publicSurface).sort()
       expect(actualKeys).toEqual(
         [
+          'AuthProcessor',
           'AuthRestClient',
           'AuthRestModule',
-          'AuthStrategyService',
-          'DeduplicateInflight',
           'HookableHttpService',
+          'REST_MODULE_OPTIONS',
           'ResilencePresets',
           'RestClient',
           'RestModule',

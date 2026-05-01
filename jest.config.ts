@@ -11,21 +11,11 @@ const config: Config = {
     '^.+\\.tsx?$': [
       'ts-jest',
       {
-        // Inline compiler overrides allow Jest (CommonJS) to import TypeScript
-        // source without a separate tsconfig file or bundler step.
-        // `module`/`moduleResolution`/`verbatimModuleSyntax` are overridden so
-        // Jest's CommonJS loader can resolve imports correctly.
-        // `emitDecoratorMetadata` is disabled to prevent Istanbul from counting
-        // the `typeof D !== "undefined"` guards emitted for generic method
-        // parameters as uncoverable branches.
-        tsconfig: {
-          module: 'commonjs',
-          moduleResolution: 'node',
-          esModuleInterop: true,
-          verbatimModuleSyntax: false,
-          types: ['node', 'jest'],
-          emitDecoratorMetadata: false,
-        },
+        // tsconfig.spec.json extends the root tsconfig (experimentalDecorators,
+        // emitDecoratorMetadata:false to avoid uncoverable Istanbul branches)
+        // and includes test files so the IDE Language Server also has project
+        // context for them.
+        tsconfig: './tsconfig.spec.json',
       },
     ],
   },
