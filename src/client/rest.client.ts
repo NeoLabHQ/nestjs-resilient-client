@@ -78,7 +78,7 @@ function mergeSignal(
  * @example
  * ```ts
  * import { Module } from '@nestjs/common'
- * import { RestModule, RestClient, ResilencePresets } from 'nestjs-http-client'
+ * import { RestModule, RestClient, ResilencePresets } from 'nestjs-resilient-client'
  *
  * // Inject RestClient via RestModule (recommended).
  * // RestModule.forRootAsync handles HttpModule registration and wiring.
@@ -117,7 +117,7 @@ export class RestClient extends HookableHttpService implements Loggable {
    * @example
    * ```ts
    * import { CircuitBreakerPolicy } from 'cockatiel'
-   * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+   * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
    *
    * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
    *
@@ -172,7 +172,7 @@ export class RestClient extends HookableHttpService implements Loggable {
    *
    * @example
    * ```ts
-   * import { RestClient } from 'nestjs-http-client'
+   * import { RestClient } from 'nestjs-resilient-client'
    *
    * // RestClient.dispatch is called automatically on every public verb call.
    * // The policy wraps the request transparently — no special call-site needed.

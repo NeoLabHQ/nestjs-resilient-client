@@ -11,8 +11,8 @@ Thanks for taking the time to contribute. This document covers the local develop
 ## Quick Start
 
 ```bash
-git clone https://github.com/NeoLabHQ/nestjs-log-decorator.git
-cd nestjs-log-decorator
+git clone https://github.com/NeoLabHQ/nestjs-resilient-client.git
+cd nestjs-resilient-client
 npm install
 npm run dev
 # Concurrently runs the build in watch mode and the unit tests

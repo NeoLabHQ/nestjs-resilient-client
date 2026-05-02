@@ -25,7 +25,7 @@ import type { RxjsPipeline } from './rxjs-pipeline'
  *
  * @example
  * ```ts
- * import type { HttpVerb } from 'nestjs-http-client'
+ * import type { HttpVerb } from 'nestjs-resilient-client'
  *
  * function logVerb(verb: HttpVerb): void {
  *   console.log(`dispatching HTTP verb: ${verb}`)
@@ -60,7 +60,7 @@ export type HttpVerb =
  *
  * @example
  * ```ts
- * import type { HttpServiceLike } from 'nestjs-http-client'
+ * import type { HttpServiceLike } from 'nestjs-resilient-client'
  * import type { AxiosInstance, AxiosRequestConfig } from 'axios'
  *
  * // Custom transport that forwards every verb to fetch-based implementation
@@ -105,7 +105,7 @@ export interface HttpServiceLike {
  *
  * @example
  * ```ts
- * import type { InvokeArgs } from 'nestjs-http-client'
+ * import type { InvokeArgs } from 'nestjs-resilient-client'
  *
  * // Args for a GET request
  * const getArgs: InvokeArgs = {
@@ -151,7 +151,7 @@ export interface InvokeArgs {
  * ```ts
  * import { Injectable } from '@nestjs/common'
  * import type { AxiosResponse } from 'axios'
- * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+ * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-resilient-client'
  *
  * // Logging facade: records every verb invocation and the resulting status
  * @Injectable()
@@ -207,7 +207,7 @@ export abstract class BaseHttpService {
    * @example
    * ```ts
    * import type { AxiosResponse } from 'axios'
-   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-resilient-client'
    *
    * class TimingClient extends BaseHttpService {
    *   protected override async dispatch<T = unknown>(
@@ -243,7 +243,7 @@ export abstract class BaseHttpService {
    * @example
    * ```ts
    * import type { AxiosResponse } from 'axios'
-   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-resilient-client'
    *
    * class RetryOnceClient extends BaseHttpService {
    *   protected override async dispatch<T = unknown>(
@@ -286,7 +286,7 @@ export abstract class BaseHttpService {
    *
    * @example
    * ```ts
-   * import { RestClient } from 'nestjs-http-client'
+   * import { RestClient } from 'nestjs-resilient-client'
    *
    * // Register a request interceptor on the underlying axios instance
    * const client = new RestClient(httpService)

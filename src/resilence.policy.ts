@@ -50,7 +50,7 @@ export const LOW_QUALITY_TIMEOUT_MS = 180_000;
  *
  * @example
  * ```ts
- * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+ * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
  *
  * // Use CONSERVATIVE preset (default — safe methods only, 60 s per-attempt timeout)
  * const conservative = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
@@ -79,7 +79,7 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
      *
      * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
      * const response = await client.get('/health')
@@ -99,7 +99,7 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
      *
      * const client = new RestClient(httpService, ResilencePresets.RESTFULL)
      * const response = await client.put('/resources/42', { name: 'updated' })
@@ -122,7 +122,7 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-http-client'
+     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
      *
      * const client = new RestClient(httpService, ResilencePresets.LOW_QUALITY)
      * // Long-running safe request; retried up to 3 times with up to 3 min per attempt.

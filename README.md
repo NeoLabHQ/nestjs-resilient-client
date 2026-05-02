@@ -4,12 +4,12 @@
 
 <div align="center">
 
-<h1>NestJS HTTP Client</h1>
+<h1>NestJS Resilient Client</h1>
 
-![Build Status](https://github.com/neolabhq/nestjs-http-client/actions/workflows/verify.yaml/badge.svg)
-[![npm version](https://img.shields.io/npm/v/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
-[![Bundle Size](https://img.shields.io/bundlephobia/minzip/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
-[![NPM Downloads](https://img.shields.io/npm/dw/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
+![Build Status](https://github.com/neolabhq/nestjs-resilient-client/actions/workflows/verify.yaml/badge.svg)
+[![npm version](https://img.shields.io/npm/v/nestjs-resilient-client)](https://www.npmjs.com/package/nestjs-resilient-client)
+[![Bundle Size](https://img.shields.io/bundlephobia/minzip/nestjs-resilient-client)](https://www.npmjs.com/package/nestjs-resilient-client)
+[![NPM Downloads](https://img.shields.io/npm/dw/nestjs-resilient-client)](https://www.npmjs.com/package/nestjs-resilient-client)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
 
 Drop in replacement for `@nestjs/axios` `HttpService` with retries, circuit breakers, bulkheads, timeout, fallbacks and other resilience patterns integrated.
@@ -45,14 +45,13 @@ Zero-configuration resilience and transient-fault-handling HTTP client based on 
 Install library:
 
 ```sh
-npm i nestjs-http-client
+npm i nestjs-resilient-client
 ```
 
 Add module:
 
 ```ts
-import { Module } from '@nestjs/common'
-import { RestModule } from 'nestjs-http-client'
+import { RestModule } from 'nestjs-resilient-client'
 
 @Module({
   imports: [
@@ -66,8 +65,7 @@ export class CatalogModule {}
 Use client in service:
 
 ```ts
-import { Injectable } from '@nestjs/common'
-import { RestClient } from 'nestjs-http-client'
+import { RestClient } from 'nestjs-resilient-client'
 
 @Injectable()
 export class CatalogService {
@@ -120,8 +118,7 @@ Proactive policies engage *before* a failure to manage load.
 For requests that do not require authentication, `RestModule.registerAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilience` is omitted, the `CONSERVATIVE` preset is applied.
 
 ```ts
-import { Module } from '@nestjs/common'
-import { RestModule, ResilencePresets } from 'nestjs-http-client'
+import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
 
 @Module({
   imports: [
@@ -144,8 +141,7 @@ export class CatalogModule {}
 `RestModule` exports `RestClient`, so any provider in `CatalogModule` (or modules that import it) can inject `RestClient` directly:
 
 ```ts
-import { Injectable } from '@nestjs/common'
-import { RestClient } from 'nestjs-http-client'
+import { RestClient } from 'nestjs-resilient-client'
 
 @Injectable()
 export class CatalogService {
@@ -216,8 +212,7 @@ Two timeout channels coexist in the stack: the axios-level `timeout` (applied to
 Concretely:
 
 ```ts
-import { Module } from '@nestjs/common'
-import { RestModule } from 'nestjs-http-client'
+import { RestModule } from 'nestjs-resilient-client'
 
 
 @Module({
@@ -268,8 +263,7 @@ If you already have an `HttpService` provider (for example shared across multipl
 
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
-import { Module } from '@nestjs/common'
-import { RestClient } from 'nestjs-http-client'
+import { RestClient } from 'nestjs-resilient-client'
 
 @Module({
   imports: [HttpModule],
@@ -289,8 +283,7 @@ export class CatalogModule {}
 Inject `RestClient` anywhere and call any axios verb. Each call goes through the composed resilience policy:
 
 ```ts
-import { Injectable } from '@nestjs/common'
-import { RestClient } from 'nestjs-http-client'
+import { RestClient } from 'nestjs-resilient-client'
 
 @Injectable()
 export class CatalogService {
@@ -309,8 +302,7 @@ Compose only the policies you need. Unspecified fields are omitted from the pipe
 
 ```ts
 import { HttpModule, HttpService } from '@nestjs/axios'
-import { Module } from '@nestjs/common'
-import { RestClient, type ResilanceConfig } from 'nestjs-http-client'
+import { RestClient, type ResilanceConfig } from 'nestjs-resilient-client'
 import { isAxiosError } from 'axios'
 
 const customConfig: ResilanceConfig<unknown> = {
@@ -368,7 +360,7 @@ export class DataModule {}
 When several callers issue the same logical request concurrently, `deduplication` shares a single in-flight `Observable` subscription so the upstream sees exactly one network call. The cache entry is evicted as soon as the source completes or errors, so sequential calls always trigger a fresh request. The default cache key is `${verb}:${args.url ?? args.config.url ?? ''}`; supply `key` to customise (e.g. include a tenant header).
 
 ```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 const dedupeConfig: ResilanceConfig<unknown> = {
   deduplication: {
@@ -387,7 +379,7 @@ const dedupeConfig: ResilanceConfig<unknown> = {
 Smooths the outbound emission rate using either a token-bucket (burstable) or leaky-bucket (constant rate) strategy. `'token-bucket'` allows bursts up to `capacity`, then sustains `refillRatePerSec` requests per second. `'leaky-bucket'` emits at exactly `refillRatePerSec` regardless of arrival pattern.
 
 ```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 // Allow short bursts of up to 10 requests, then sustain 5 requests/sec.
 const tokenBucketConfig: ResilanceConfig<unknown> = {
@@ -413,7 +405,7 @@ const leakyBucketConfig: ResilanceConfig<unknown> = {
 Caps the number of emissions allowed within a fixed sliding window (e.g. "no more than 100 requests per minute"). Excess emissions wait for a slot in the next window. Throttling differs from rate-limiting in that it enforces a hard ceiling over a fixed-duration window rather than smoothing cadence over time.
 
 ```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 // No more than 100 requests per minute.
 const throttlingConfig: ResilanceConfig<unknown> = {
@@ -433,9 +425,8 @@ const throttlingConfig: ResilanceConfig<unknown> = {
 When the credential is a long-lived API token (or any value the application never has to refresh), the simplest path is to set `axios.headers.Authorization` on the axios config that `RestModule` forwards to the internally-registered `HttpModule`. Every outbound request inherits the header automatically.
 
 ```ts
-import { Module } from '@nestjs/common'
 import { ConfigModule, ConfigService } from '@nestjs/config'
-import { RestModule, RestClient } from 'nestjs-http-client'
+import { RestModule, RestClient } from 'nestjs-resilient-client'
 
 @Module({
   imports: [
@@ -467,13 +458,11 @@ The `AuthStrategy` interface declares four methods that together own the full se
 - `invalidate(): void` — drops the current session so the next request triggers a fresh handshake; called by `AuthRestClient` after a 401.
 
 ```ts
-import { Inject, Injectable, Module } from '@nestjs/common'
-import { ConfigModule, ConfigService } from '@nestjs/config'
 import {
   AuthRestModule,
   RestClient,
   type AuthStrategy,
-} from 'nestjs-http-client'
+} from 'nestjs-resilient-client'
 import type { AxiosRequestConfig } from 'axios'
 
 // Strategy classes are full DI citizens — `@Injectable()` enables
@@ -543,8 +532,7 @@ export class AppModule {}
 3. On a single HTTP 401 response, calls `BearerTokenStrategy.invalidate()`, then re-authenticates  `BearerTokenStrategy.authenticate()`, and retries the underlying request once.
 
 ```ts
-import { Injectable } from '@nestjs/common'
-import { AuthRestClient } from 'nestjs-http-client'
+import { AuthRestClient } from 'nestjs-resilient-client'
 
 @Injectable()
 export class OrdersService {
@@ -573,9 +561,8 @@ Every hook may be `async` — return values are awaited, so token lookups, instr
 The `HooksConfig` lives on `RestModuleOptions` (and `AuthRestModuleOptions`, which extends it) so hooks can be wired through the standard DI factory:
 
 ```ts
-import { Module } from '@nestjs/common'
 import { isAxiosError } from 'axios'
-import { RestModule, type HooksConfig } from 'nestjs-http-client'
+import { RestModule, type HooksConfig } from 'nestjs-resilient-client'
 
 const hooks: HooksConfig = {
   // Attach a correlation ID to every outgoing request — re-invoked per retry
@@ -831,7 +818,7 @@ Sub-types `RetryConfig`, `CircuitBreakerConfig`, `BulkheadConfig`, `FallbackConf
 
 ```ts
 import { ExponentialBackoff } from 'cockatiel'
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 const retryOnlyConfig: ResilanceConfig<unknown> = {
   retry: {
@@ -845,7 +832,7 @@ const retryOnlyConfig: ResilanceConfig<unknown> = {
 
 ```ts
 import { ExponentialBackoff } from 'cockatiel'
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 const retryWithBreakerConfig: ResilanceConfig<unknown> = {
   retry: {
@@ -863,7 +850,7 @@ const retryWithBreakerConfig: ResilanceConfig<unknown> = {
 **Example — full pipeline (cockatiel + RxJS):**
 
 ```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
+import type { ResilanceConfig } from 'nestjs-resilient-client'
 
 const fullyConfigured: ResilanceConfig<unknown, void, string> = {
   retry: {
@@ -908,12 +895,11 @@ Subclasses extend whichever layer matches the responsibility you need:
 ```ts
 import type { AxiosResponse } from 'axios'
 import type { HttpService } from '@nestjs/axios'
-import { Injectable } from '@nestjs/common'
 import {
   HookableHttpService,
   type HttpVerb,
   type InvokeArgs,
-} from 'nestjs-http-client'
+} from 'nestjs-resilient-client'
 
 /**
  * Logging facade that records every verb invocation and the resulting status.

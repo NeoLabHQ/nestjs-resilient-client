@@ -35,7 +35,7 @@ import type { RxjsPipeline } from './rxjs-pipeline'
  *
  * @example
  * ```ts
- * import type { HooksConfig } from 'nestjs-http-client'
+ * import type { HooksConfig } from 'nestjs-resilient-client'
  *
  * const hooks: HooksConfig = {
  *   // Attach a correlation ID to every outgoing request
@@ -136,7 +136,7 @@ export interface HooksConfig {
  *
  * @example
  * ```ts
- * import { HookableHttpService } from 'nestjs-http-client'
+ * import { HookableHttpService } from 'nestjs-resilient-client'
  *
  * // Attach a correlation ID and log every successful response.
  * const client = new HookableHttpService(httpService, {

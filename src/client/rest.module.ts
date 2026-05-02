@@ -20,7 +20,7 @@ import { RestClient } from './rest.client'
  * ```ts
  * import { HttpModule, HttpService } from '@nestjs/axios'
  * import { Module } from '@nestjs/common'
- * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+ * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
  *
  * @Module({
  *   imports: [
@@ -68,8 +68,8 @@ export interface RestFromHttpServiceOptions {
  * @example
  * ```ts
  * import { ConfigModule, ConfigService } from '@nestjs/config'
- * import { RestModule, ResilencePresets } from 'nestjs-http-client'
- * import type { RestModuleOptions } from 'nestjs-http-client'
+ * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+ * import type { RestModuleOptions } from 'nestjs-resilient-client'
  *
  * RestModule.forRootAsync({
  *   imports: [ConfigModule],
@@ -114,7 +114,7 @@ export interface RestModuleOptions {
  * @example
  * ```ts
  * import { Inject, Injectable } from '@nestjs/common'
- * import { REST_MODULE_OPTIONS, type RestModuleOptions } from 'nestjs-http-client'
+ * import { REST_MODULE_OPTIONS, type RestModuleOptions } from 'nestjs-resilient-client'
  *
  * @Injectable()
  * export class DiagnosticsService {
@@ -227,7 +227,7 @@ export function resolveResilience(
  * @example
  * ```ts
  * import { Module } from '@nestjs/common'
- * import { RestModule } from 'nestjs-http-client'
+ * import { RestModule } from 'nestjs-resilient-client'
  *
  * @Module({
  *   imports: [
@@ -301,7 +301,7 @@ export class RestModule {
    * ```ts
    * import { HttpModule, HttpService } from '@nestjs/axios'
    * import { Module } from '@nestjs/common'
-   * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+   * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [
@@ -377,7 +377,7 @@ export class RestModule {
    * ```ts
    * import { Module, Injectable } from '@nestjs/common'
    * import { ConfigModule, ConfigService } from '@nestjs/config'
-   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-http-client'
+   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [

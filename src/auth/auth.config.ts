@@ -30,7 +30,7 @@ import type { RestClient } from "../client/rest.client";
  * import { Injectable } from '@nestjs/common'
  * import { ConfigService } from '@nestjs/config'
  * import type { AxiosRequestConfig } from 'axios'
- * import type { AuthStrategy, RestClient } from 'nestjs-http-client'
+ * import type { AuthStrategy, RestClient } from 'nestjs-resilient-client'
  *
  * // A concrete implementation that fetches a Bearer token from an OAuth2
  * // token endpoint and refreshes it 60 s before it expires.

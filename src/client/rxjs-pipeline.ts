@@ -22,7 +22,7 @@ import type { DeduplicationConfig, RateLimiterConfig, ResilanceConfig, Throttlin
  *
  * @example
  * ```ts
- * import type { RxjsPipeline } from 'nestjs-http-client'
+ * import type { RxjsPipeline } from 'nestjs-resilient-client'
  *
  * // Trivial passthrough pipeline (acts as a no-op)
  * const passthrough: RxjsPipeline = (_verb, _args, source) => source
@@ -91,7 +91,7 @@ export const rxjsOperatorFactories = {
  *
  * @example
  * ```ts
- * import { buildRxjsPipeline, type ResilanceConfig } from 'nestjs-http-client'
+ * import { buildRxjsPipeline, type ResilanceConfig } from 'nestjs-resilient-client'
  *
  * const config: ResilanceConfig<unknown> = {
  *   deduplication: {},
@@ -171,7 +171,7 @@ function defaultDeduplicationKey(verb: HttpVerb, args: InvokeArgs): string {
  *
  * @example
  * ```ts
- * import { deduplicationOperator } from 'nestjs-http-client'
+ * import { deduplicationOperator } from 'nestjs-resilient-client'
  *
  * const dedup = deduplicationOperator({})
  *
@@ -350,7 +350,7 @@ function tokenBucketPipeline(config: RateLimiterConfig): RxjsPipeline {
  *
  * @example
  * ```ts
- * import { rateLimiterOperator } from 'nestjs-http-client'
+ * import { rateLimiterOperator } from 'nestjs-resilient-client'
  *
  * // Allow short bursts of up to 10 requests, then sustain 5 emissions/sec.
  * const limiter = rateLimiterOperator({
@@ -418,7 +418,7 @@ interface ThrottleQueueEntry {
  *
  * @example
  * ```ts
- * import { throttlingOperator } from 'nestjs-http-client'
+ * import { throttlingOperator } from 'nestjs-resilient-client'
  *
  * // Allow at most 1 request per 100 ms (≈ 10 req/s).
  * const throttle = throttlingOperator({ requestsPerInterval: 1, intervalMs: 100 })

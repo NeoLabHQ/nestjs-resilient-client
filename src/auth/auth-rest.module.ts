@@ -47,7 +47,7 @@ import type { AuthStrategy } from './auth.config'
  *
  * @example
  * ```ts
- * import type { AuthRestModuleOptions } from 'nestjs-http-client'
+ * import type { AuthRestModuleOptions } from 'nestjs-resilient-client'
  *
  * // Returned by the useFactory callback in AuthRestModule.forRootAsync.
  * const options: AuthRestModuleOptions = {
@@ -70,7 +70,7 @@ export type AuthRestModuleOptions = RestModuleOptions
  * @example
  * ```ts
  * import { Inject, Injectable } from '@nestjs/common'
- * import { AUTH_MODULE_OPTIONS, type AuthRestModuleOptions } from 'nestjs-http-client'
+ * import { AUTH_MODULE_OPTIONS, type AuthRestModuleOptions } from 'nestjs-resilient-client'
  *
  * // Inject the raw options for diagnostics or test fixtures.
  * @Injectable()
@@ -135,7 +135,7 @@ export const AUTH_MODULE_OPTIONS: unique symbol = Symbol('AUTH_MODULE_OPTIONS')
  *   AuthRestModule,
  *   RestClient,
  *   type AuthStrategy,
- * } from 'nestjs-http-client'
+ * } from 'nestjs-resilient-client'
  * import type { AxiosRequestConfig } from 'axios'
  *
  * // Strategy classes are full DI citizens — `@Injectable()` enables
@@ -240,7 +240,7 @@ export class AuthRestModule {
    * ```ts
    * import { Injectable } from '@nestjs/common'
    * import { HttpService } from '@nestjs/axios'
-   * import { AuthRestModule, type AuthStrategy } from 'nestjs-http-client'
+   * import { AuthRestModule, type AuthStrategy } from 'nestjs-resilient-client'
    *
    * @Injectable()
    * class StaticBearerStrategy implements AuthStrategy {

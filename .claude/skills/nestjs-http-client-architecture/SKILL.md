@@ -1,13 +1,13 @@
 ---
 name: NestJS HTTP Client Architecture
-description: Architecture patterns, decorator design, and testing setup for the nestjs-http-client library — RestClient, AuthRestClient, AuthProcessor, BaseHttpService/HookableHttpService, HooksConfig, RxJS resilience operators, @DeduplicateInflight, and the jest/Stryker/testcontainers test stack.
+description: Architecture patterns, decorator design, and testing setup for the nestjs-resilient-client library — RestClient, AuthRestClient, AuthProcessor, BaseHttpService/HookableHttpService, HooksConfig, RxJS resilience operators, @DeduplicateInflight, and the jest/Stryker/testcontainers test stack.
 ---
 
 # NestJS HTTP Client Architecture
 
 ## Overview
 
-This skill documents the architecture of the `nestjs-http-client` library. The library wraps `@nestjs/axios`'s `HttpService` with a cockatiel resilience policy stack. It exposes two clients: `RestClient` (resilient HTTP client) and `AuthRestClient` (authenticated HTTP client). Decorator logic uses `base-decorators@1.1.0` primitives (`Wrap`). Testing uses jest@29 + ts-jest, Stryker v8, jest-it-up, and testcontainers.
+This skill documents the architecture of the `nestjs-resilient-client` library. The library wraps `@nestjs/axios`'s `HttpService` with a cockatiel resilience policy stack. It exposes two clients: `RestClient` (resilient HTTP client) and `AuthRestClient` (authenticated HTTP client). Decorator logic uses `base-decorators@1.1.0` primitives (`Wrap`). Testing uses jest@29 + ts-jest, Stryker v8, jest-it-up, and testcontainers.
 
 ## Key Concepts
 

@@ -21,7 +21,7 @@ import type { HttpVerb, InvokeArgs } from "./base-http.service";
  * ```ts
  * import { isAxiosError } from 'axios'
  * import { ExponentialBackoff } from 'cockatiel'
- * import type { RetryConfig } from 'nestjs-http-client'
+ * import type { RetryConfig } from 'nestjs-resilient-client'
  *
  * const retryConfig: RetryConfig<unknown> = {
  *   maxAttempts: 3,
@@ -64,7 +64,7 @@ export interface RetryConfig<T> {
  *
  * @example
  * ```ts
- * import type { CircuitBreakerConfig } from 'nestjs-http-client'
+ * import type { CircuitBreakerConfig } from 'nestjs-resilient-client'
  *
  * // Open after 5 consecutive failures; probe again after 30 s
  * const cbConfig: CircuitBreakerConfig = {
@@ -113,7 +113,7 @@ export interface CircuitBreakerConfig {
  *
  * @example
  * ```ts
- * import type { BulkheadConfig } from 'nestjs-http-client'
+ * import type { BulkheadConfig } from 'nestjs-resilient-client'
  *
  * // Allow at most 10 concurrent requests; queue up to 20 more before rejecting
  * const bulkheadConfig: BulkheadConfig = {
@@ -148,7 +148,7 @@ export interface BulkheadConfig {
  * @example
  * ```ts
  * import { TimeoutStrategy } from 'cockatiel'
- * import type { TimeoutConfig } from 'nestjs-http-client'
+ * import type { TimeoutConfig } from 'nestjs-resilient-client'
  *
  * // 10 s per attempt with cooperative cancellation (axios honours the signal)
  * const timeoutConfig: TimeoutConfig = {
@@ -181,7 +181,7 @@ export interface TimeoutConfig {
  *
  * @example
  * ```ts
- * import type { FallbackConfig } from 'nestjs-http-client'
+ * import type { FallbackConfig } from 'nestjs-resilient-client'
  *
  * // Return a static empty array when every retry attempt is exhausted
  * const fallbackConfig: FallbackConfig<string[]> = {
@@ -217,7 +217,7 @@ export interface FallbackConfig<R = unknown> {
  *
  * @example
  * ```ts
- * import type { DeduplicationConfig } from 'nestjs-http-client'
+ * import type { DeduplicationConfig } from 'nestjs-resilient-client'
  *
  * // Use default key derivation
  * const defaultDedup: DeduplicationConfig = {}
@@ -257,7 +257,7 @@ export interface DeduplicationConfig {
  *
  * @example
  * ```ts
- * import type { RateLimiterConfig } from 'nestjs-http-client'
+ * import type { RateLimiterConfig } from 'nestjs-resilient-client'
  *
  * // Allow short bursts of up to 10 requests, then sustain 5 requests/sec
  * const tokenBucket: RateLimiterConfig = {
@@ -303,7 +303,7 @@ export interface RateLimiterConfig {
  *
  * @example
  * ```ts
- * import type { ThrottlingConfig } from 'nestjs-http-client'
+ * import type { ThrottlingConfig } from 'nestjs-resilient-client'
  *
  * // No more than 100 requests per minute
  * const throttling: ThrottlingConfig = {
@@ -327,7 +327,7 @@ export interface ThrottlingConfig {
  * @example
  * ```ts
  * import { ExponentialBackoff } from 'cockatiel'
- * import type { ResilanceConfig } from 'nestjs-http-client'
+ * import type { ResilanceConfig } from 'nestjs-resilient-client'
  *
  * // Retry-only configuration with exponential backoff
  * const retryOnly: ResilanceConfig<unknown> = {

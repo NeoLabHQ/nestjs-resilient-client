@@ -44,8 +44,8 @@ const AUTHENTICATE_DEDUP_KEY = "authenticate";
  *
  * @example
  * ```ts
- * import { AuthProcessor } from 'nestjs-http-client'
- * import type { AuthStrategy, RestClient } from 'nestjs-http-client'
+ * import { AuthProcessor } from 'nestjs-resilient-client'
+ * import type { AuthStrategy, RestClient } from 'nestjs-resilient-client'
  *
  * // Strategy is a user-supplied class implementing AuthStrategy.
  * // The processor is constructed by AuthRestModule with both collaborators
@@ -104,8 +104,8 @@ export class AuthProcessor {
      *
      * @example
      * ```ts
-     * import { AuthProcessor, RestClient } from 'nestjs-http-client'
-     * import type { AuthStrategy } from 'nestjs-http-client'
+     * import { AuthProcessor, RestClient } from 'nestjs-resilient-client'
+     * import type { AuthStrategy } from 'nestjs-resilient-client'
      *
      * declare const strategy: AuthStrategy
      * declare const restClient: RestClient

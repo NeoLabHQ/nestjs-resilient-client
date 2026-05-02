@@ -44,7 +44,7 @@ import type { AuthProcessor } from './auth-processor'
  *
  * @example
  * ```ts
- * import { AuthRestClient, AuthProcessor, RestClient } from 'nestjs-http-client'
+ * import { AuthRestClient, AuthProcessor, RestClient } from 'nestjs-resilient-client'
  *
  * declare const restClient: RestClient
  * declare const authProcessor: AuthProcessor
@@ -76,7 +76,7 @@ export class AuthRestClient extends HookableHttpService {
    *
    * @example
    * ```ts
-   * import { AuthRestClient, AuthProcessor, RestClient } from 'nestjs-http-client'
+   * import { AuthRestClient, AuthProcessor, RestClient } from 'nestjs-resilient-client'
    *
    * declare const restClient: RestClient
    * declare const authProcessor: AuthProcessor

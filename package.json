@@ -1,16 +1,16 @@
 {
-  "name": "nestjs-http-client",
+  "name": "nestjs-resilient-client",
   "version": "0.1.0",
   "description": "Zero-configuration resilience and transient-fault-handling HTTP Client based on official @nestjs/axios library",
   "author": "Vlad Goncharov <leovs010@gmail.com>",
   "license": "AGPL-3.0",
-  "homepage": "https://github.com/NeoLabHQ/nestjs-http-client#readme",
+  "homepage": "https://github.com/NeoLabHQ/nestjs-resilient-client#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NeoLabHQ/nestjs-http-client"
+    "url": "https://github.com/NeoLabHQ/nestjs-resilient-client"
   },
   "bugs": {
-    "url": "https://github.com/NeoLabHQ/nestjs-http-client/issues"
+    "url": "https://github.com/NeoLabHQ/nestjs-resilient-client/issues"
   },
   "exports": {
     ".": "./dist/index.cjs",
