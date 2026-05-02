@@ -9,12 +9,12 @@ Zero-configuration resilience and transient-fault-handling HTTP client that wrap
 - **Zero-configuration resilience** — pragmatic default resilience preset, suitable for the majority of workloads.
 - **Composable resilience pipeline** — retry, circuit breaker, bulkhead, and fallback policies can be enabled independently and are wrapped in a single deterministic order.
 - **RxJS-based traffic shaping** — opt-in `deduplication`, `rateLimiter`, and `throttling` policies implemented as pure RxJS operators on the underlying `HttpService` Observable.
-- **Pluggable authentication** — `AuthRestModule.forRootAsync` accepts a user-supplied class implementing `AuthStrategy` (Bearer, Basic, custom). The strategy is a full DI citizen registered via `useClass` self-binding, so it can constructor-inject `ConfigService` or any other provider. Single-flight authentication, lazy refresh, and one-shot 401 recovery are built in.
-- **Hookable lifecycle** — every client extends `HookableHttpService`, so `onInvoke` / `onReturn` / `onError` callbacks let you transform requests, observe responses, or substitute fallback values without subclassing.
+- **Pluggable authentication** — AuthModule accepts custom `AuthStrategy` (Bearer, Basic, etc.), allowing you to define custom authentication approaches for APIs that not support regular auth tokens.
+- **Hookable lifecycle** — every client extends `HookableHttpService`, so `onInvoke` / `onReturn` / `onError` callbacks let you transform requests, integrate observability or other custom logic without boilerplate for each method type.
 - **Idempotency-aware retries** — only safe HTTP methods (`GET`, `HEAD`, `OPTIONS` by default) are retried on 5xx / network errors. Cancellations and SSL/cert failures are excluded from retry.
 - **Highly customizable** — fine-grained control over each resilience policy.
 - **Promises-based API** — all methods return plain Promises, not Observables. Despite that RXJS is great, people and LLMs much better at writing and reading Promises, rather than Observables.
-- **Easy to use** — All clients implement regular axios interface, so you can use them as a drop-in replacement for `@nestjs/axios` `HttpService`. With only difference, that you not need to add `.toPromise()` or `firstValueFrom()` to get the result.
+- **Easy to use** — All clients implement regular axios interface, so you can use them as a drop-in replacement for `@nestjs/axios` `HttpService`. With only difference, that you no longer need to add `.toPromise()` or `firstValueFrom()` to get the result.
 
 ## Quick Start
 
@@ -51,21 +51,26 @@ export class CatalogService {
 
   async getProduct(id: string) {
     // exposes regular axios interface
+    // retried up to three times on 5xx / network errors
     const response = await this.client.get<Product>(`https://api.example.com/products/${id}`)
+    return response.data
+  }
+
+  async createProduct(product: Product) {
+    // do not retried by default, because it can be no idempotent, and not safe to retry.
+    const response = await this.client.post<Product>(`https://api.example.com/products`, product)
     return response.data
   }
 }
 ```
 
-That's it. The static `imports: [RestModule]` wiring (no `forRootAsync` factory call) yields a `RestClient` with the `CONSERVATIVE` resilience preset enabled out of the box — idempotent verbs (`GET`, `HEAD`, `OPTIONS`) are retried up to three times on 5xx / network errors, every attempt is bounded by a 60 s per-attempt timeout, and a sampling circuit breaker trips on sustained upstream failure. When you need to override the axios configuration (`baseURL`, `timeout`, headers, …) or pick a different resilience preset, switch to `RestModule.forRootAsync({...})` — see the [Usage](#usage) section below.
-
 ## Resilience Patterns
 
-The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example Timeout policy. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
+The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example timeout on obviusly too long request. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
 
-Other presets "RESTFULL" and "LOW_QUALITY" trade off retry aggressiveness against the trust you place in the upstream API.
+Other presets "RESTfull" and "Low Quality" trade off retry aggressiveness against the trust you place in the upstream API.
 
-> Presets is based on years of development experience of the authors, rather than theoretical best practices. As a result, they are pragmatic and should work as you need, without need to tweak them for "bad" upstream APIs.
+> Presets is based on years of development experience of the authors, rather than theoretical best practices. As a result, they are pragmatic and should work as you expect, without need to tweak them for "bad" upstream APIs.
 
 ### Reactive Resilience Patterns
 
@@ -81,71 +86,10 @@ Proactive policies engage *before* a failure to manage load.
 - **Bulkhead** — Limits the number of concurrent calls to the service. Supports semaphore-based concurrency cap with optional queue.
 - **Fallback** — Return predefined response on failures. Supports: graceful-degradation value or factory invoked on policy-handled failures fallback.
 - **Timeout** — Cancel request after a certain amount of time. Supports: cooperative and aggressive strategies.
+- **Deduplication** — Reuse existing request if it is already in flight. As soon as the request completes or errors, the promise is resolved, so sequential calls always trigger a fresh request.
+- **Rate Limiter** — Decrease the rate of requests to the upstream using either a token-bucket (burstable) or leaky-bucket (constant rate) strategy.
+- **Throttling** — Limit the number of requests to the upstream to a fixed sliding window (e.g. "no more than N per minute"). Excess requests wait in queue and are emitted in the next window.
 
-### RxJS Traffic-Shaping Patterns
-
-Three opt-in policies are layered on the Observable returned by the underlying `HttpService` via pure RxJS operators (no custom queue/timer logic). They are composed OUTERMOST-first as `deduplication → rateLimiter → throttling`, so deduplicated cache hits short-circuit before the rate-limit and throttling slots are entered.
-
-#### Deduplication
-
-When several callers issue the same logical request concurrently, `deduplication` shares a single in-flight `Observable` subscription so the upstream sees exactly one network call. The cache entry is evicted as soon as the source completes or errors, so sequential calls always trigger a fresh request. The default cache key is `${verb}:${args.url ?? args.config.url ?? ''}`; supply `keyBuilder` to customise (e.g. include a tenant header).
-
-```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
-
-const dedupeConfig: ResilanceConfig<unknown> = {
-  deduplication: {
-    // Optional: include a tenant header in the cache key so requests for
-    // different tenants do not collide.
-    keyBuilder: (verb, args) => {
-      const tenant = (args.config.headers as Record<string, string> | undefined)?.['X-Tenant'] ?? ''
-      return `${tenant}:${verb}:${args.url ?? args.config.url ?? ''}`
-    },
-  },
-}
-```
-
-#### Rate Limiter
-
-Smooths the outbound emission rate using either a token-bucket (burstable) or leaky-bucket (constant rate) strategy. `'token-bucket'` allows bursts up to `capacity`, then sustains `refillRatePerSec` requests per second. `'leaky-bucket'` emits at exactly `refillRatePerSec` regardless of arrival pattern.
-
-```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
-
-// Allow short bursts of up to 10 requests, then sustain 5 requests/sec.
-const tokenBucketConfig: ResilanceConfig<unknown> = {
-  rateLimiter: {
-    strategy: 'token-bucket',
-    capacity: 10,
-    refillRatePerSec: 5,
-  },
-}
-
-// Strict 2 requests/sec regardless of arrival pattern.
-const leakyBucketConfig: ResilanceConfig<unknown> = {
-  rateLimiter: {
-    strategy: 'leaky-bucket',
-    capacity: 1,
-    refillRatePerSec: 2,
-  },
-}
-```
-
-#### Throttling
-
-Caps the number of emissions allowed within a fixed sliding window (e.g. "no more than 100 requests per minute"). Excess emissions wait for a slot in the next window. Throttling differs from rate-limiting in that it enforces a hard ceiling over a fixed-duration window rather than smoothing cadence over time.
-
-```ts
-import type { ResilanceConfig } from 'nestjs-http-client'
-
-// No more than 100 requests per minute.
-const throttlingConfig: ResilanceConfig<unknown> = {
-  throttling: {
-    requestsPerInterval: 100,
-    intervalMs: 60_000,
-  },
-}
-```
 
 ## Usage
 
@@ -236,9 +180,7 @@ Almost identical to `CONSERVATIVE` preset, but with longer timeout.
 
 ### Timeout Precedence
 
-Two timeout channels coexist in the stack: the axios-level `timeout` (applied to every individual HTTP call by axios itself) and the resilience-level `timeout` field on `ResilanceConfig` (applied per attempt by cockatiel's `TimeoutPolicy`, wrapped INSIDE retry). Without coordination they would silently shadow each other — an `axios.timeout: 5_000` would be quietly overridden by the `CONSERVATIVE` preset's per-attempt `60_000`, and consumers would see the slower of the two.
-
-`RestModule.forRootAsync` (and `AuthRestModule.forRootAsync`) reconcile the two channels at module-construction time using the following rule:
+Two timeout channels coexist in the stack: the axios-level `timeout` (applied to every individual HTTP call by axios itself) and the resilience-level `timeout` field on `ResilanceConfig` (applied per attempt by cockatiel's `TimeoutPolicy`, wrapped INSIDE retry). `RestModule.forRootAsync` (and `AuthRestModule.forRootAsync`) reconcile the two channels at module-construction time using the following rule:
 
 | `axios.timeout` | `opts.resilience` | Resulting resilience timeout |
 | --------------- | ----------------- | ---------------------------- |
@@ -253,43 +195,48 @@ Concretely:
 import { Module } from '@nestjs/common'
 import { RestModule } from 'nestjs-http-client'
 
-// axios.timeout WINS: the CONSERVATIVE preset's 60 s per-attempt timeout is
-// stripped before RestClient is constructed, so the only deadline in effect
-// is axios's 5 s. A request to a 6 s upstream fails after ~5 s with
-// `ECONNABORTED` — no library-level timeout fires earlier or later.
+
 @Module({
   imports: [
     RestModule.forRootAsync({
       useFactory: () => ({
-        axios: { baseURL: 'https://api.example.com', timeout: 5_000 },
-        // resilience omitted — preset would otherwise apply 60 s timeout
+        axios: {
+          baseURL: 'https://api.example.com', 
+          // axios.timeout WINS: the CONSERVATIVE preset's 60 s per-attempt timeout is
+          // stripped before RestClient is constructed, so the only deadline in effect
+          // is axios's 5 s. A request to a 6 s upstream fails after ~5 s with
+          // `ECONNABORTED` — no library-level timeout fires earlier or later.
+          timeout: 5_000 
+          // resilience omitted — axios timeout will be used instead
+        },
       }),
     }),
   ],
 })
 export class FastAxiosTimeoutModule {}
 
-// Explicit user resilience.timeout WINS even when axios.timeout is also set:
-// the request fails after ~1 s (the resilience timeout fires first).
 RestModule.forRootAsync({
   useFactory: () => ({
-    axios: { baseURL: 'https://api.example.com', timeout: 5_000 },
+    axios: { timeout: 5_000 },
+    // Explicit user resilience.timeout WINS even when axios.timeout is also set:
+    // the request fails after ~1 s (the resilience timeout fires first).
     resilience: { timeout: 1_000 },
   }),
 })
 
-// axios.timeout: 0 is the documented "disabled" sentinel — it does NOT
-// trigger the strip rule, so the explicit resilience.timeout: 1_500 is
-// honoured. A 3 s upstream request fails after ~1 500 ms.
+
 RestModule.forRootAsync({
   useFactory: () => ({
     axios: { timeout: 0 },
+    // axios.timeout: 0 is the documented "disabled" sentinel — it does NOT
+    // trigger the strip rule, so the explicit resilience.timeout: 1_500 is
+    // honoured. A 3 s upstream request fails after ~1 500 ms.
     resilience: { timeout: 1_500 },
   }),
 })
 ```
 
-The `forHttpService` delegation hook does NOT run this reconciliation — there is no `axios.timeout` to reconcile against in that path, so the caller's `resilience` is honoured verbatim.
+| The `forHttpService` delegation hook does NOT run this reconciliation — there is no `axios.timeout` to reconcile against in that path, so the caller's `resilience` is honoured verbatim.
 
 ### Bare `RestClient` (no auth, manual wiring)
 
@@ -391,13 +338,75 @@ const customConfig: ResilanceConfig<unknown> = {
 export class DataModule {}
 ```
 
+
+#### Deduplication
+
+When several callers issue the same logical request concurrently, `deduplication` shares a single in-flight `Observable` subscription so the upstream sees exactly one network call. The cache entry is evicted as soon as the source completes or errors, so sequential calls always trigger a fresh request. The default cache key is `${verb}:${args.url ?? args.config.url ?? ''}`; supply `keyBuilder` to customise (e.g. include a tenant header).
+
+```ts
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+const dedupeConfig: ResilanceConfig<unknown> = {
+  deduplication: {
+    // Optional: include a tenant header in the cache key so requests for
+    // different tenants do not collide.
+    keyBuilder: (verb, args) => {
+      const tenant = (args.config.headers as Record<string, string> | undefined)?.['X-Tenant'] ?? ''
+      return `${tenant}:${verb}:${args.url ?? args.config.url ?? ''}`
+    },
+  },
+}
+```
+
+#### Rate Limiter
+
+Smooths the outbound emission rate using either a token-bucket (burstable) or leaky-bucket (constant rate) strategy. `'token-bucket'` allows bursts up to `capacity`, then sustains `refillRatePerSec` requests per second. `'leaky-bucket'` emits at exactly `refillRatePerSec` regardless of arrival pattern.
+
+```ts
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+// Allow short bursts of up to 10 requests, then sustain 5 requests/sec.
+const tokenBucketConfig: ResilanceConfig<unknown> = {
+  rateLimiter: {
+    strategy: 'token-bucket',
+    capacity: 10,
+    refillRatePerSec: 5,
+  },
+}
+
+// Strict 2 requests/sec regardless of arrival pattern.
+const leakyBucketConfig: ResilanceConfig<unknown> = {
+  rateLimiter: {
+    strategy: 'leaky-bucket',
+    capacity: 1,
+    refillRatePerSec: 2,
+  },
+}
+```
+
+#### Throttling
+
+Caps the number of emissions allowed within a fixed sliding window (e.g. "no more than 100 requests per minute"). Excess emissions wait for a slot in the next window. Throttling differs from rate-limiting in that it enforces a hard ceiling over a fixed-duration window rather than smoothing cadence over time.
+
+```ts
+import type { ResilanceConfig } from 'nestjs-http-client'
+
+// No more than 100 requests per minute.
+const throttlingConfig: ResilanceConfig<unknown> = {
+  throttling: {
+    requestsPerInterval: 100,
+    intervalMs: 60_000,
+  },
+}
+```
+
 ### Authenticated client
 
-> **Module choice.** For static API tokens, use `RestModule` directly with `axios.headers.Authorization` (see below) — no strategy class, no auth module. For dynamic credentials (token refresh, OAuth flows, anything where `isAuthenticated()` can become `false`), use `AuthRestModule` with a class implementing `AuthStrategy`.
+> For static API tokens, use `RestModule` directly with `axios.headers.Authorization`. For dynamic credentials (token refresh, OAuth flows, anything where `isAuthenticated()` can become `false`), use `AuthRestModule` with a class implementing `AuthStrategy`.
 
 #### Static API token via `RestModule`
 
-When the credential is a long-lived API token (or any value the application never has to refresh), the simplest path is to set `axios.headers.Authorization` on the axios config that `RestModule` forwards to the internally-registered `HttpModule`. Every outbound request inherits the header automatically — no auth module, no strategy class, no 401 retry path.
+When the credential is a long-lived API token (or any value the application never has to refresh), the simplest path is to set `axios.headers.Authorization` on the axios config that `RestModule` forwards to the internally-registered `HttpModule`. Every outbound request inherits the header automatically.
 
 ```ts
 import { Module } from '@nestjs/common'
@@ -424,11 +433,7 @@ import { RestModule, RestClient } from 'nestjs-http-client'
 export class CatalogModule {}
 ```
 
-End-to-end coverage for this exact wiring lives in `tests/static-token.e2e.spec.ts`.
-
 #### Authenticated client — Bearer token
-
-`AuthRestModule.forRootAsync` takes a synchronous `authStrategy` class token plus an async `useFactory` that returns the runtime collaborators (`axios` config, optional `resilience`, optional `hooks`). The class implementing `AuthStrategy` is registered via `useClass` self-binding, so it is a full DI citizen and can constructor-inject any provider available in the surrounding module scope (e.g. `ConfigService`).
 
 The `AuthStrategy` interface declares four methods that together own the full session lifecycle:
 
@@ -507,63 +512,11 @@ class BearerTokenStrategy implements AuthStrategy {
 export class AppModule {}
 ```
 
-#### Authenticated client — Basic auth
+`AuthRestModule` will inject `AuthRestClient` into any service. Each request method automatically:
 
-Basic authentication is just a different `extendRequest` strategy. Because the credentials never expire on a per-session basis, `authenticate` is a no-op and `isAuthenticated` always returns `true` — the strategy class still satisfies all four methods of the `AuthStrategy` interface.
-
-```ts
-import { Inject, Injectable } from '@nestjs/common'
-import { ConfigModule, ConfigService } from '@nestjs/config'
-import {
-  AuthRestModule,
-  type AuthStrategy,
-  type RestClient,
-} from 'nestjs-http-client'
-import type { AxiosRequestConfig } from 'axios'
-
-@Injectable()
-class BasicAuthStrategy implements AuthStrategy {
-  private readonly credentials: string
-
-  constructor(@Inject(ConfigService) config: ConfigService) {
-    const user = config.getOrThrow<string>('BASIC_AUTH_USER')
-    const pass = config.getOrThrow<string>('BASIC_AUTH_PASS')
-    this.credentials = Buffer.from(`${user}:${pass}`).toString('base64')
-  }
-
-  // No handshake: the credentials are derived once in the constructor.
-  async authenticate(_client: RestClient): Promise<void> {}
-
-  // Static credentials never expire; always authenticated.
-  isAuthenticated(): boolean {
-    return true
-  }
-
-  extendRequest(config: AxiosRequestConfig): AxiosRequestConfig {
-    return {
-      ...config,
-      headers: { ...(config.headers ?? {}), Authorization: `Basic ${this.credentials}` },
-    }
-  }
-
-  // No cached session to drop, but the contract still requires the method.
-  invalidate(): void {}
-}
-
-AuthRestModule.forRootAsync({
-  authStrategy: BasicAuthStrategy,
-  imports: [ConfigModule],
-  useFactory: () => ({
-    axios: { baseURL: 'https://api.example.com' },
-  }),
-})
-```
-
-Inject `AuthRestClient` into any service. Each request method automatically:
-
-1. Calls `authProcessor.authenticateIfNeeded()` (single-flight; concurrent callers share one handshake).
-2. Augments the request via `authProcessor.extendRequest(config)` (which delegates to `strategy.extendRequest`).
-3. On a single HTTP 401 response, calls `authProcessor.clearAuth()` (which delegates to `strategy.invalidate()`), re-authenticates, and retries the underlying request once.
+1. Calls `BearerTokenStrategy.isAuthenticated()`, if it `false`, calls `BearerTokenStrategy.authenticate()` (single request, concurrent callers share same request).
+2. Augments the request via `BearerTokenStrategy.extendRequest(config)` 
+3. On a single HTTP 401 response, calls `BearerTokenStrategy.invalidate()`, then re-authenticates  `BearerTokenStrategy.authenticate()`, and retries the underlying request once.
 
 ```ts
 import { Injectable } from '@nestjs/common'
@@ -574,6 +527,7 @@ export class OrdersService {
   constructor(private readonly client: AuthRestClient) {}
 
   async listOrders() {
+    // automatically authenticate if needed
     const response = await this.client.get<Order[]>('/orders')
     return response.data
   }
@@ -582,15 +536,15 @@ export class OrdersService {
 
 ## Hooks
 
-Every client (`RestClient`, `AuthRestClient`, and the standalone `HookableHttpService`) accepts an optional `hooks?: HooksConfig` constructor argument. Hooks bracket every dispatched verb invocation with three optional callbacks:
+Every client (`RestClient`, `AuthRestClient`, and the standalone `HookableHttpService`) accepts an optional `hooks?: HooksConfig` constructor argument. Hooks bracket every dispatched method invocation with three optional callbacks:
 
-- `onInvoke(verb, args)` — runs BEFORE the underlying transport call. Return a new `InvokeArgs` carrier to replace the args used for dispatch (e.g. attach a correlation header, rewrite the URL); return `undefined` (or `Promise<undefined>`) for passthrough. MUST NOT mutate the input.
+- `onInvoke(method, args)` — runs BEFORE the underlying transport call. Return a new `InvokeArgs` carrier to replace the args used for dispatch (e.g. attach a correlation header, rewrite the URL); return `undefined` (or `Promise<undefined>`) for passthrough. 
 - `onReturn(verb, args, response)` — runs AFTER a successful response. Return a new `AxiosResponse` to replace the response handed to the caller (e.g. redact a sensitive field); return `undefined` for passthrough.
 - `onError(verb, args, error)` — runs WHEN the transport (or any inner policy) throws. Return an `AxiosResponse` to suppress the error and resolve with the substituted response (graceful degradation); return `undefined` / `void` to rethrow the original error.
 
 Every hook may be `async` — return values are awaited, so token lookups, instrumentation flushes, and async transformations integrate naturally. `undefined` is the universal "passthrough" sentinel; any other value (including `null`) is treated as a substitute.
 
-**Hooks run INSIDE the resilience pipeline.** When `RestClient.dispatch` wraps `super.dispatch(...)` in `policy.execute(...)`, every retry attempt re-invokes the hook lifecycle — a retried request observes hook-transformed args on every attempt rather than just the first. This invariant is what makes `onInvoke` usable for per-attempt concerns like generating a fresh correlation ID per retry.
+**Hooks run INSIDE the resilience pipeline.** Every retry attempt re-invokes the hook lifecycle — a retried request observes hook-transformed args on every attempt rather than just the first. This invariant is what makes `onInvoke` usable for per-attempt concerns like generating a fresh correlation ID per retry.
 
 The `HooksConfig` lives on `RestModuleOptions` (and `AuthRestModuleOptions`, which extends it) so hooks can be wired through the standard DI factory:
 
@@ -645,14 +599,11 @@ const hooks: HooksConfig = {
 export class CatalogModule {}
 ```
 
-Hooks shine when you need cross-cutting behaviour without subclassing — request-id stamping, structured logging, response redaction, OpenTelemetry span emission, or graceful degradation for known error shapes — while still benefiting from the full resilience pipeline.
-
 ## Behaviour notes
 
 - **401 retry** — on a single HTTP 401, `AuthRestClient` calls `strategy.invalidate()` via the `AuthProcessor`, re-authenticates, re-extends the *original* args (so a stale `Authorization` header from the failed attempt is replaced), then replays the call exactly once against the underlying transport (which itself runs through the resilience pipeline). A second 401 — or any non-401 error — is rethrown without re-invalidating the strategy.
 - **Concurrent authentication** — any number of concurrent authentication attempts result in a single real request to the authentication service. The `AuthProcessor` enforces single-flight semantics via `@DeduplicateInflight` on the underlying `strategy.authenticate(client)` call.
 - **Cancellation** — the cockatiel and user `signal` is forwarded into axios. So retries, timeouts, and circuit-breakers can cancel in-flight axios calls cooperatively.
-- **Hook-vs-resilience composition** — hooks wrap INSIDE `policy.execute(...)`, so retries re-invoke `onInvoke` / `onReturn` / `onError` once per attempt. Move them outside the pipeline only by writing your own subclass of `BaseHttpService` that bypasses `HookableHttpService`.
 
 ## API Reference
 
@@ -924,12 +875,9 @@ const fullyConfigured: ResilanceConfig<unknown, void, string> = {
 }
 ```
 
-### Class hierarchy: `BaseHttpService` / `HookableHttpService`
+### HookableHttpService
 
-`RestClient` and `AuthRestClient` both extend `HookableHttpService`, which is a concrete subclass of the abstract `BaseHttpService`. The split keeps responsibilities tight:
-
-- `BaseHttpService` (abstract) — owns the verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `postForm`, `putForm`, `patchForm`) and routes every call through a protected `dispatch(verb, args)` template method. Holds an optional `rxjsPipeline` slot that is consulted only on the reactive `Observable` branch of `callUnderlying`.
-- `HookableHttpService` (concrete, extends `BaseHttpService`) — accepts an optional `hooks?: HooksConfig` and overrides `dispatch` to bracket `super.dispatch(...)` with `onInvoke` / `onReturn` / `onError`. Constructor signature: `(httpService, hooks?, rxjsPipeline?)`.
+`HookableHttpService` — accepts an optional `hooks?: HooksConfig` and overrides `dispatch` to bracket `super.dispatch(...)` with `onInvoke` / `onReturn` / `onError`. Constructor signature: `(httpService, hooks?, rxjsPipeline?)`.
 
 Subclasses extend whichever layer matches the responsibility you need:
 

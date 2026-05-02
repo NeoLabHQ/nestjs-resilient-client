@@ -20,7 +20,7 @@ The verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `p
 - **`RestClient`** (`src/client/rest.client.ts`) — extends `HookableHttpService`. Adds the cockatiel resilience pipeline plus the RxJS pipeline (built once in the constructor via `buildRxjsPipeline(config)` and forwarded to the base) and overrides `dispatch` to wrap `super.dispatch(...)` in `policy.execute(...)`.
 - **`AuthRestClient`** (`src/auth/auth-rest.client.ts`) — extends `HookableHttpService`. Composes a `RestClient` (the underlying transport) with an `AuthProcessor` and overrides `dispatch` to run the auth handshake → `extendRequest` → `super.dispatch(...)` → 401-recovery flow. NEVER forwards an `rxjsPipeline` because the underlying transport returns a `Promise`.
 
-### Hooks run INSIDE the resilience pipeline (AC-21)
+### Hooks run INSIDE the resilience pipeline 
 
 `RestClient.dispatch` calls `super.dispatch(verb, argsWithSignal)` from inside `policy.execute(...)`. Because `super.dispatch` is `HookableHttpService.dispatch` (which bracketed `super.dispatch` with `onInvoke` / `onReturn` / `onError`), every retry attempt re-invokes the hook lifecycle. Concretely: a retried request runs `onInvoke` again with the carrier args, observes the (possibly hook-transformed) args on the inner transport call, and routes the response through `onReturn` (or the error through `onError`). This is the AC-21 invariant — DO NOT move the hook layer outside `policy.execute(...)` or it will fire only once per logical request and retries will see stale args.
 
