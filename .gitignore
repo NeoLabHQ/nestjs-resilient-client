@@ -144,3 +144,4 @@ dist
 .specs/scratchpad/
 
 /reports/
+stryker-tmp/

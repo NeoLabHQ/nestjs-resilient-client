@@ -1,7 +1,8 @@
 import type { AxiosRequestConfig, AxiosResponse } from 'axios'
 
+import type { HooksConfig } from '../../client/hookable-http.service'
 import type { RestClient } from '../../client/rest.client'
-import type { AuthStrategyService } from '../auth-strategy.service'
+import type { AuthProcessor } from '../auth-processor'
 import { AuthRestClient } from '../auth-rest.client'
 
 /**
@@ -103,19 +104,19 @@ function buildSut(): {
   const authStrategy = createAuthStrategyStub()
   const client = new AuthRestClient(
     restClient as unknown as RestClient,
-    authStrategy as unknown as AuthStrategyService,
+    authStrategy as unknown as AuthProcessor,
   )
   return { client, restClient, authStrategy }
 }
 
 describe('AuthRestClient', () => {
   describe('constructor and field visibility', () => {
-    it('exposes authStrategy as a public-readable field', () => {
+    it('exposes processor as a public-readable field', () => {
       const { client, authStrategy } = buildSut()
 
-      // Module wiring and adapters read `client.authStrategy` directly, so
+      // Module wiring and adapters read `client.processor` directly, so
       // the field MUST be public-readable on the instance.
-      expect(client.authStrategy).toBe(authStrategy)
+      expect(client.processor).toBe(authStrategy)
     })
   })
 
@@ -124,7 +125,7 @@ describe('AuthRestClient', () => {
       const { client, restClient } = buildSut()
 
       // Each verb is invoked with the canonical positional shape that
-      // {@link HookableHttpService} maps to `InvokeArgs`. Verbs at index 1 use
+      // {@link BaseHttpService} maps to `InvokeArgs`. Verbs at index 1 use
       // `(url, config)`; verbs at index 2 use `(url, data, config)`;
       // `request` uses `(config)` directly.
       if (verb === 'request') {
@@ -380,6 +381,44 @@ describe('AuthRestClient', () => {
       expect(response.data).toBe('recovered')
       expect(restClient.request).toHaveBeenCalledTimes(2)
       expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('hooks forwarding (AC-12)', () => {
+    it('invokes onError with (verb, args, error) when the underlying RestClient rejects with 500', async () => {
+      // AC-12: AuthRestClient must forward the optional `hooks` constructor arg
+      // to its `HookableHttpService` parent so onError observes failures from
+      // the inner auth-aware dispatch (which itself wraps the RestClient
+      // transport). A 500 is non-401, so the auth lifecycle does NOT retry —
+      // the error propagates straight to the hook layer above the dispatch.
+      const restClient = createRestClientStub()
+      const authStrategy = createAuthStrategyStub()
+      const upstreamError = makeAxiosError(500)
+      restClient.get.mockRejectedValueOnce(upstreamError)
+
+      const onError = jest.fn(
+        (_verb: string, _args: unknown, _error: unknown): undefined => undefined,
+      )
+      const hooks: HooksConfig = { onError }
+      const client = new AuthRestClient(
+        restClient as unknown as RestClient,
+        authStrategy as unknown as AuthProcessor,
+        hooks,
+      )
+
+      // Returning `undefined` from onError is the passthrough sentinel — the
+      // original error must rethrow so the caller observes the upstream failure.
+      await expect(client.get('/x')).rejects.toBe(upstreamError)
+
+      // The hook MUST be invoked at least once; the canonical signature is
+      // `(verb, args, error)` so the spy's first call carries those exact slots.
+      expect(onError).toHaveBeenCalled()
+      const [verb, args, error] = onError.mock.calls[0]
+      expect(verb).toBe('get')
+      // `args` is the InvokeArgs carrier the inner dispatch saw — for `get`,
+      // this is `{ url: '/x', config: <auth-extended config> }`.
+      expect(args).toMatchObject({ url: '/x' })
+      expect(error).toBe(upstreamError)
     })
   })
 })

@@ -2,27 +2,59 @@ import { HttpModule, HttpService } from '@nestjs/axios'
 import type { HttpModuleOptions } from '@nestjs/axios'
 import { type DynamicModule, Module } from '@nestjs/common'
 import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
+import axios from 'axios'
 
+import { ResilencePresets } from '../resilence.policy'
+import type { HooksConfig } from './hookable-http.service'
 import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
 
 /**
- * Minimal options for {@link RestModule.forHttpService} — the caller supplies a
+ * Minimal options for {@link RestModule.fromHttpService} — the caller supplies a
  * pre-resolved `HttpService` so the sub-module does not need to spin up its own
  * `HttpModule`. Used by {@link AuthRestModule} to delegate `RestClient` construction
  * to `RestModule`, eliminating the duplicated `new RestClient(httpService, config)`
  * call that would otherwise exist in both modules.
+ *
+ * @example
+ * ```ts
+ * import { HttpModule, HttpService } from '@nestjs/axios'
+ * import { Module } from '@nestjs/common'
+ * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+ *
+ * @Module({
+ *   imports: [
+ *     HttpModule,
+ *     RestModule.forHttpService({
+ *       imports: [HttpModule],
+ *       inject: [HttpService],
+ *       useFactory: (httpService: HttpService) => ({
+ *         httpService,
+ *         resilience: ResilencePresets.RESTFULL,
+ *       }),
+ *     }),
+ *   ],
+ * })
+ * export class CatalogModule {}
+ * ```
  */
 export interface RestFromHttpServiceOptions {
   /** Pre-resolved `@nestjs/axios` transport to hand to the constructed {@link RestClient}. */
   httpService: HttpService
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
   resilience?: ResilanceConfig<unknown>
+  /**
+   * Optional {@link HooksConfig} lifecycle forwarded verbatim to the
+   * constructed {@link RestClient}. Hooks (`onInvoke` / `onReturn` / `onError`)
+   * run INSIDE the resilience pipeline so retries observe hook-transformed
+   * args (AC-13, AC-21).
+   */
+  hooks?: HooksConfig
 }
 
 /**
  * Options object resolved by the consumer-supplied async factory passed to
- * {@link RestModule.forRootAsync}. Carries the two collaborating concerns the
+ * {@link RestModule.registerAsync}. Carries the two collaborating concerns the
  * module needs to wire up the resilient transport stack:
  *
  * - `axios` — forwarded verbatim to `HttpModule.registerAsync` so the
@@ -32,6 +64,25 @@ export interface RestFromHttpServiceOptions {
  * - `resilience` — optional resilience policy stack. When omitted, the
  *   module falls back to the CONSERVATIVE preset inside the {@link RestClient}
  *   provider factory (matching the documented {@link RestClient} default).
+ *
+ * @example
+ * ```ts
+ * import { ConfigModule, ConfigService } from '@nestjs/config'
+ * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+ * import type { RestModuleOptions } from 'nestjs-http-client'
+ *
+ * RestModule.forRootAsync({
+ *   imports: [ConfigModule],
+ *   inject: [ConfigService],
+ *   useFactory: (config: ConfigService): RestModuleOptions => ({
+ *     axios: {
+ *       baseURL: config.get('API_BASE_URL'),
+ *       timeout: 5_000,
+ *     },
+ *     resilience: ResilencePresets.RESTFULL,
+ *   }),
+ * })
+ * ```
  */
 export interface RestModuleOptions {
   /**
@@ -42,6 +93,13 @@ export interface RestModuleOptions {
   axios?: HttpModuleOptions
   /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
   resilience?: ResilanceConfig<unknown>
+  /**
+   * Optional {@link HooksConfig} lifecycle forwarded verbatim to the
+   * constructed {@link RestClient}. Hooks (`onInvoke` / `onReturn` / `onError`)
+   * run INSIDE the resilience pipeline so retries observe hook-transformed
+   * args (AC-13, AC-21).
+   */
+  hooks?: HooksConfig
 }
 
 /**
@@ -52,8 +110,98 @@ export interface RestModuleOptions {
  *
  * Exported for advanced consumers that need to inject the raw options object
  * into their own providers (e.g. for diagnostics or test fixtures).
+ *
+ * @example
+ * ```ts
+ * import { Inject, Injectable } from '@nestjs/common'
+ * import { REST_MODULE_OPTIONS, type RestModuleOptions } from 'nestjs-http-client'
+ *
+ * @Injectable()
+ * export class DiagnosticsService {
+ *   constructor(
+ *     @Inject(REST_MODULE_OPTIONS) private readonly opts: RestModuleOptions,
+ *   ) {}
+ *
+ *   getBaseUrl(): string {
+ *     return this.opts.axios?.baseURL ?? '(none)'
+ *   }
+ * }
+ * ```
  */
 export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
+
+/**
+ * Reconciles axios-level and resilience-level timeout configuration so the two
+ * channels never silently shadow each other. The truth table this helper
+ * implements:
+ *
+ * | `axios.timeout` | `opts.resilience` | Returned `resilience`                                  |
+ * | --------------- | ----------------- | ------------------------------------------------------ |
+ * | `undefined`     | any               | `opts.resilience` unchanged (caller had no opinion)    |
+ * | `0`             | any               | `opts.resilience` unchanged (axios `0` means disabled) |
+ * | `> 0`           | `undefined`       | `{ ...CONSERVATIVE, timeout: undefined }` (preset's    |
+ * |                 |                   | per-attempt timeout stripped so axios wins)            |
+ * | `> 0`           | defined           | `opts.resilience` unchanged (user override preserved)  |
+ *
+ * The "axios wins" case strips the CONSERVATIVE preset's per-attempt timeout
+ * from the merged config so the cockatiel pipeline does not also enforce a
+ * deadline — otherwise an axios `timeout: 5000` would be silently overridden
+ * by the preset's `60_000`. When the consumer supplies their own `resilience`,
+ * we honour it as-is: the user has explicitly chosen the resilience timeout
+ * (or its absence) and the helper does not second-guess that decision.
+ *
+ * Returns `undefined` for the "no opinion" cases so the call site can fall
+ * back to {@link RestClient}'s built-in CONSERVATIVE default via `?? CONSERVATIVE`
+ * — keeping the documented zero-config behaviour intact.
+ *
+ * @param opts - The resolved {@link RestModuleOptions} from the consumer factory.
+ * @returns The resilience config to hand to {@link RestClient}, or `undefined`
+ *   to defer to {@link RestClient}'s constructor default.
+ *
+ * @example
+ * ```ts
+ * // axios.timeout drives the deadline; preset timeout stripped.
+ * resolveResilience({ axios: { timeout: 5_000 } })
+ * // -> { retry: ..., circuitBreaker: ..., timeout: undefined }
+ *
+ * // User resilience wins regardless of axios.timeout.
+ * resolveResilience({ axios: { timeout: 5_000 }, resilience: { timeout: 1_000 } })
+ * // -> { timeout: 1_000 }
+ *
+ * // axios.timeout=0 means "disabled", not "I want axios to win".
+ * resolveResilience({ axios: { timeout: 0 } })
+ * // -> undefined (caller falls back to CONSERVATIVE)
+ * ```
+ */
+export function resolveResilience(
+  opts: RestModuleOptions,
+): ResilanceConfig<unknown> | undefined {
+  const axiosTimeout = opts.axios?.timeout
+
+  // No axios timeout opinion: caller's resilience (defined or not) is final.
+  if (axiosTimeout === undefined) {
+    return opts.resilience
+  }
+
+  // axios `timeout: 0` is the documented "disabled" sentinel — it does NOT
+  // express a preference for axios-driven cancellation, so we do not strip
+  // the preset timeout. The caller's resilience (defined or not) is final.
+  if (axiosTimeout === 0) {
+    return opts.resilience
+  }
+
+  // axios.timeout > 0 with no user resilience: strip the CONSERVATIVE preset's
+  // per-attempt timeout so axios's deadline is the only one in effect.
+  // Object spread with `timeout: undefined` is sufficient because
+  // `resiliencePolicyBuilder` checks `config.timeout !== undefined` before
+  // attaching a `TimeoutPolicy`.
+  if (opts.resilience === undefined) {
+    return { ...ResilencePresets.CONSERVATIVE, timeout: undefined }
+  }
+
+  // axios.timeout > 0 with user resilience: user opinion is preserved.
+  return opts.resilience
+}
 
 /**
  * NestJS dynamic module that wires the unauthenticated, resilient HTTP client
@@ -75,13 +223,65 @@ export const REST_MODULE_OPTIONS: unique symbol = Symbol('REST_MODULE_OPTIONS')
  * construct {@link RestClient} for the unauthenticated stack. Re-registering
  * {@link RestClient} elsewhere will produce a second, unrelated instance and
  * break shared circuit-breaker / bulkhead state.
+ *
+ * @example
+ * ```ts
+ * import { Module } from '@nestjs/common'
+ * import { RestModule } from 'nestjs-http-client'
+ *
+ * @Module({
+ *   imports: [
+ *     RestModule.forRootAsync({
+ *       useFactory: () => ({
+ *         axios: { baseURL: 'https://api.example.com' },
+ *       }),
+ *     }),
+ *   ],
+ *   exports: [RestModule],
+ * })
+ * export class CatalogModule {}
+ * ```
  */
-@Module({})
+@Module({
+  // Zero-config wiring: `imports: [RestModule]` (no factory call) yields a
+  // usable `RestClient` with the documented CONSERVATIVE-preset defaults
+  // (AC-15). `HttpModule` is intentionally NOT listed as an `imports` entry
+  // here — doing so would clash with the consumer-supplied
+  // `HttpModule.registerAsync(...)` that `forRootAsync` registers (NestJS
+  // deduplicates modules by class identity, so the bare static import would
+  // silently shadow the dynamic axios configuration). Instead, `HttpService`
+  // is provided directly via a factory that builds it from a default
+  // `axios.create({})` instance — same shape as `HttpModule.register({})`
+  // would produce, but scoped to `RestModule` itself so the dynamic-module
+  // path is free to register its own `HttpService` without interference.
+  providers: [
+    {
+      provide: HttpService,
+      // axios.create({}) returns an instance carrying the global axios
+      // defaults (no `baseURL`, no `timeout`); equivalent to what
+      // `HttpModule` would yield if imported as a bare class. Consumers that
+      // need a configured axios instance must use `RestModule.forRootAsync`
+      // (which registers `HttpModule.registerAsync(...)` and overrides this
+      // provider via the same `HttpService` token).
+      useFactory: (): HttpService => new HttpService(axios.create({})),
+    },
+    {
+      provide: RestClient,
+      // Constructor-only path: omits both `config` and `hooks` so the client
+      // falls back to the CONSERVATIVE preset (per RestClient.constructor).
+      // Consumers that need a different preset, hooks, or axios configuration
+      // should call `RestModule.forRootAsync(...)` instead.
+      useFactory: (httpService: HttpService): RestClient => new RestClient(httpService),
+      inject: [HttpService],
+    },
+  ],
+  exports: [RestClient],
+})
 export class RestModule {
   /**
    * Builds a minimal {@link DynamicModule} that provides and exports a single
    * {@link RestClient} built from a pre-resolved `HttpService`. Unlike
-   * {@link forRootAsync}, this method does **not** register an internal
+   * {@link registerAsync}, this method does **not** register an internal
    * `HttpModule` — it expects the caller to supply the `HttpService` instance
    * directly via the `useFactory` return value.
    *
@@ -96,8 +296,30 @@ export class RestModule {
    *
    * @param options - Async factory descriptor with a `useFactory` that returns {@link RestFromHttpServiceOptions}.
    * @returns DynamicModule providing and exporting {@link RestClient}.
+   *
+   * @example
+   * ```ts
+   * import { HttpModule, HttpService } from '@nestjs/axios'
+   * import { Module } from '@nestjs/common'
+   * import { RestModule, ResilencePresets } from 'nestjs-http-client'
+   *
+   * @Module({
+   *   imports: [
+   *     HttpModule,
+   *     RestModule.forHttpService({
+   *       imports: [HttpModule],
+   *       inject: [HttpService],
+   *       useFactory: (httpService: HttpService) => ({
+   *         httpService,
+   *         resilience: ResilencePresets.RESTFULL,
+   *       }),
+   *     }),
+   *   ],
+   * })
+   * export class CatalogModule {}
+   * ```
    */
-  static forHttpService(options: {
+  static fromHttpService(options: {
     useFactory: (
       ...args: unknown[]
     ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
@@ -118,8 +340,12 @@ export class RestModule {
         {
           provide: RestClient,
           useFactory: async (...args: unknown[]): Promise<RestClient> => {
-            const { httpService, resilience } = await options.useFactory(...args)
-            return new RestClient(httpService, resilience)
+            const { httpService, resilience, hooks } = await options.useFactory(...args)
+            // `fromHttpService` receives an explicit `httpService` and trusts
+            // the caller's resilience verbatim (no `resolveResilience` here —
+            // there is no `axios.timeout` to reconcile against, since axios
+            // configuration is the caller's concern in this delegation path).
+            return new RestClient(httpService, resilience, hooks)
           },
           inject,
         },
@@ -146,8 +372,40 @@ export class RestModule {
    *
    * @param options - Async factory descriptor. Matches the NestJS dynamic-module idiom.
    * @returns DynamicModule wiring REST_MODULE_OPTIONS, HttpModule, and RestClient.
+   *
+   * @example
+   * ```ts
+   * import { Module, Injectable } from '@nestjs/common'
+   * import { ConfigModule, ConfigService } from '@nestjs/config'
+   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-http-client'
+   *
+   * @Module({
+   *   imports: [
+   *     RestModule.registerAsync({
+   *       imports: [ConfigModule],
+   *       inject: [ConfigService],
+   *       useFactory: (config: ConfigService) => ({
+   *         axios: { baseURL: config.get('API_BASE_URL') },
+   *         resilience: ResilencePresets.CONSERVATIVE,
+   *       }),
+   *     }),
+   *   ],
+   *   exports: [RestModule],
+   * })
+   * export class CatalogModule {}
+   *
+   * // Then inject RestClient anywhere in the module
+   * @Injectable()
+   * export class CatalogService {
+   *   constructor(private readonly client: RestClient) {}
+   *   async getProduct(id: string) {
+   *     const response = await this.client.get<{ id: string; name: string }>(`/products/${id}`)
+   *     return response.data
+   *   }
+   * }
+   * ```
    */
-  static forRootAsync(options: {
+  static registerAsync(options: {
     useFactory: (
       ...args: unknown[]
     ) => Promise<RestModuleOptions> | RestModuleOptions
@@ -190,16 +448,54 @@ export class RestModule {
           useFactory: options.useFactory,
           inject,
         },
-        // 2. RestClient: composed from the HttpService provided by the
-        //    internally-registered HttpModule plus the consumer's resilience
-        //    config. Default-preset fallback applied here so explicit-undefined
+        // 2. HttpService re-binding. CRITICAL: the class-level `@Module({...})`
+        //    on `RestModule` registers a default `HttpService` (`axios.create({})`,
+        //    no consumer config) so the zero-config `imports: [RestModule]` path
+        //    (AC-15) yields a usable client and so {@link RestModule.forHttpService}
+        //    can resolve `HttpService` inside `RestModule`'s scope. NestJS DI
+        //    resolves provider tokens from the LOCAL providers list before
+        //    consulting imported modules, so without this re-binding the
+        //    static-decorator default would silently shadow the configured
+        //    `HttpService` exported by `HttpModule.registerAsync(...)` in the
+        //    `imports` block above — and the consumer-supplied axios
+        //    configuration (`baseURL`, `timeout`, default headers, …) would
+        //    never reach the resolved `RestClient` (verified via debugging:
+        //    `restClient.axiosRef.defaults.baseURL` was `undefined` despite
+        //    `useFactory: () => ({ axios: { baseURL: ... } })` returning a
+        //    populated config).
+        //
+        //    The re-bind reconstructs a fresh `HttpService` from the
+        //    consumer-supplied axios config (read out of `REST_MODULE_OPTIONS`)
+        //    using the same `axios.create(config)` call `HttpModule.registerAsync`
+        //    performs internally. Side-by-side with the imported `HttpModule`,
+        //    this means the underlying axios instance is built twice for the
+        //    same config — a small price for keeping the static decorator's
+        //    zero-config providers list independent of `forRootAsync`'s
+        //    dynamic registration.
+        {
+          provide: HttpService,
+          useFactory: (opts: RestModuleOptions): HttpService =>
+            new HttpService(axios.create(opts.axios ?? {})),
+          inject: [REST_MODULE_OPTIONS],
+        },
+        // 3. RestClient: composed from the re-bound `HttpService` (which now
+        //    carries the consumer's axios configuration) plus the consumer's
+        //    resilience config (run through `resolveResilience` to reconcile
+        //    the axios-vs-resilience timeout precedence — see helper docstring).
+        //    Default-preset fallback applied here so explicit-undefined
         //    and omitted both yield CONSERVATIVE.
+        //    `opts.hooks` is forwarded as the third positional arg so the
+        //    HookableHttpService lifecycle is wired through DI (AC-13).
         {
           provide: RestClient,
           useFactory: (
             httpService: HttpService,
             opts: RestModuleOptions,
-          ): RestClient => new RestClient(httpService, opts.resilience),
+          ): RestClient => new RestClient(
+            httpService,
+            resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE,
+            opts.hooks,
+          ),
           inject: [HttpService, REST_MODULE_OPTIONS],
         },
       ],

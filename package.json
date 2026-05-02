@@ -1,16 +1,16 @@
 {
   "name": "nestjs-http-client",
   "version": "0.1.0",
-  "description": "Zero-configuration resilience and transient-fault-handling HTTP Client that wraps official @nestjs/axios library",
+  "description": "Zero-configuration resilience and transient-fault-handling HTTP Client based on official @nestjs/axios library",
   "author": "Vlad Goncharov <leovs010@gmail.com>",
   "license": "AGPL-3.0",
-  "homepage": "https://github.com/NeoLabHQ/nestjs-log-decorator#readme",
+  "homepage": "https://github.com/NeoLabHQ/nestjs-http-client#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NeoLabHQ/nestjs-log-decorator"
+    "url": "https://github.com/NeoLabHQ/nestjs-http-client"
   },
   "bugs": {
-    "url": "https://github.com/NeoLabHQ/nestjs-log-decorator/issues"
+    "url": "https://github.com/NeoLabHQ/nestjs-http-client/issues"
   },
   "exports": {
     ".": "./dist/index.cjs",

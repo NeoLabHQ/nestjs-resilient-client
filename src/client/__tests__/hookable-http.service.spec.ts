@@ -1,36 +1,41 @@
 import type { AxiosResponse } from 'axios'
-import { of } from 'rxjs'
+import { type Observable, of } from 'rxjs'
 
 import {
-  HookableHttpService,
+  BaseHttpService,
   type HttpServiceLike,
   type HttpVerb,
   type InvokeArgs,
+} from '../base-http.service'
+import {
+  HookableHttpService,
+  type HooksConfig,
 } from '../hookable-http.service'
+import type { RxjsPipeline } from '../rxjs-pipeline'
 
 /**
- * Concrete subclass of the abstract {@link HookableHttpService} so the spec
+ * Concrete subclass of the abstract {@link BaseHttpService} so the spec
  * can exercise the protected `dispatch` template method through the public
  * verb surface. The class adds no behaviour — every public verb defers to the
  * inherited template method.
  */
-class ConcreteHookable extends HookableHttpService {}
+class ConcreteHookable extends BaseHttpService {}
 
 /**
- * Subclass that exposes the protected {@link HookableHttpService.dispatch}
- * and {@link HookableHttpService.callUnderlying} methods so tests can assert
+ * Subclass that exposes the protected {@link BaseHttpService.dispatch}
+ * and {@link BaseHttpService.callUnderlying} methods so tests can assert
  * on the template-method override pattern (subclasses pre/post-process the
  * carrier and either delegate to `super.dispatch` or call `callUnderlying`
  * directly to bypass any sibling override).
  */
-class DispatchOverrideHookable extends HookableHttpService {
+class DispatchOverrideHookable extends BaseHttpService {
   /** Captures the args the override observed before forwarding. */
   observedArgs: InvokeArgs | undefined
 
   /**
    * Mutates the carrier (replaces the config) and forwards via
-   * {@link HookableHttpService.dispatch}. The base `dispatch` simply calls
-   * {@link HookableHttpService.callUnderlying}, so this override proves a
+   * {@link BaseHttpService.dispatch}. The base `dispatch` simply calls
+   * {@link BaseHttpService.callUnderlying}, so this override proves a
    * subclass can rewrite the carrier and still reach the transport.
    */
   protected override async dispatch<T = unknown>(
@@ -94,7 +99,7 @@ const successResponse: AxiosResponse = {
   config: {} as AxiosResponse['config'],
 }
 
-describe('HookableHttpService', () => {
+describe('BaseHttpService', () => {
   describe('default dispatch lifecycle', () => {
     it('delegates straight to the underlying transport without modifying the carrier', async () => {
       const stubHttp = buildHttpServiceStub(successResponse)
@@ -229,6 +234,80 @@ describe('HookableHttpService', () => {
     })
   })
 
+  describe('rxjsPipeline slot', () => {
+    it('applies rxjsPipeline to Observable result when provided (verb + args + source forwarded)', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+      // Observable transport so the pipeline branch is exercised — Promise
+      // transports skip the pipeline entirely.
+      stubHttp.get.mockReturnValue(of(successResponse))
+
+      // Identity pipeline — passes the source through unchanged. Wrapped in a
+      // jest mock so the spec can assert on the (verb, args, source) it
+      // received, proving `callUnderlying` forwards every slot.
+      const pipeline = jest.fn<Observable<AxiosResponse>, Parameters<RxjsPipeline>>(
+        (_verb, _args, source) => source,
+      )
+
+      const client = new ConcreteHookable(
+        stubHttp as unknown as HttpServiceLike,
+        pipeline,
+      )
+      const result = await client.get('/x', { headers: { 'x-trace': 't' } })
+
+      // Identity pipeline → response unchanged.
+      expect(result).toBe(successResponse)
+      // Pipeline received the verb, the carrier args, and the underlying
+      // Observable source produced by `invokeVerb`.
+      expect(pipeline).toHaveBeenCalledTimes(1)
+      const [verb, args, source] = pipeline.mock.calls[0]
+      expect(verb).toBe('get')
+      expect(args).toEqual({
+        url: '/x',
+        config: { headers: { 'x-trace': 't' } },
+      })
+      // The source is the raw Observable returned by the transport — the
+      // dispatcher forwards it without unwrapping so the operator owns the
+      // subscription strategy.
+      expect(typeof (source as Observable<AxiosResponse>).subscribe).toBe('function')
+    })
+
+    it('does NOT apply rxjsPipeline to Promise<AxiosResponse> results (RestClient/Auth path)', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+      // Promise-returning transport — same shape RestClient exposes when
+      // wrapped by AuthRestClient. The pipeline contract is defined over
+      // Observable, so this branch must skip it entirely.
+      stubHttp.get.mockReturnValue(Promise.resolve(successResponse))
+
+      const pipeline = jest.fn<Observable<AxiosResponse>, Parameters<RxjsPipeline>>(
+        (_verb, _args, source) => source,
+      )
+
+      const client = new ConcreteHookable(
+        stubHttp as unknown as HttpServiceLike,
+        pipeline,
+      )
+      const result = await client.get('/x')
+
+      expect(result).toBe(successResponse)
+      // Pipeline never ran because the transport returned a Promise.
+      expect(pipeline).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the raw Observable when no rxjsPipeline is supplied (default behaviour preserved)', async () => {
+      const stubHttp = buildHttpServiceStub(successResponse)
+      stubHttp.get.mockReturnValue(of(successResponse))
+
+      // No pipeline argument → optional slot is `undefined`, so
+      // `callUnderlying` must hand the raw Observable straight to
+      // `firstValueFrom` (i.e. behave exactly as it did before the slot
+      // was introduced).
+      const client = new ConcreteHookable(stubHttp as unknown as HttpServiceLike)
+      const result = await client.get('/x')
+
+      expect(result).toBe(successResponse)
+    })
+  })
+
   describe('axiosRef passthrough', () => {
     it('exposes the underlying axiosRef when the transport carries it', () => {
       const stubHttp = buildHttpServiceStub(successResponse)
@@ -236,5 +315,186 @@ describe('HookableHttpService', () => {
 
       expect(client.axiosRef).toBe(stubHttp.axiosRef)
     })
+  })
+})
+
+describe('HookableHttpService — hooks lifecycle', () => {
+  it('AC-8: onInvoke transforms args; the upstream receives the transformed request', async () => {
+    const stubHttp = buildHttpServiceStub(successResponse)
+    const hooks: HooksConfig = {
+      // Attach an X-Hook header by returning a NEW carrier (must not mutate
+      // the input). The hook contract requires immutable args handling so
+      // the resilience pipeline can re-issue retries from the same source.
+      onInvoke: (_verb, args) => ({
+        ...args,
+        config: {
+          ...args.config,
+          headers: { ...(args.config.headers ?? {}), 'X-Hook': '1' },
+        },
+      }),
+    }
+    const client = new HookableHttpService(stubHttp as unknown as HttpServiceLike, hooks)
+
+    await client.get('/x')
+
+    // The upstream observes the transformed config — proving onInvoke ran
+    // BEFORE the inner dispatch and its return value replaced the carrier.
+    expect(stubHttp.get).toHaveBeenCalledWith('/x', { headers: { 'X-Hook': '1' } })
+  })
+
+  it('AC-9: onReturn substitutes the response; the caller observes the substituted data', async () => {
+    const upstream: AxiosResponse = { ...successResponse, data: { id: 1 } }
+    const stubHttp = buildHttpServiceStub(upstream)
+    const hooks: HooksConfig = {
+      // Wrap the response payload — proving onReturn runs AFTER super.dispatch
+      // and its return value replaces the response handed back to the caller.
+      onReturn: (_verb, _args, response) => ({
+        ...response,
+        data: { wrapped: response.data },
+      }),
+    }
+    const client = new HookableHttpService(stubHttp as unknown as HttpServiceLike, hooks)
+
+    const result = await client.get<{ wrapped: { id: number } }>('/x')
+
+    expect(result.data).toEqual({ wrapped: { id: 1 } })
+  })
+
+  it('AC-10: onError returns AxiosResponse to suppress the error and substitute a fallback response', async () => {
+    const stubHttp = buildHttpServiceStub(successResponse)
+    const upstreamError = new Error('boom')
+    // Force the inner dispatch to throw — onError must intercept and recover.
+    stubHttp.get.mockRejectedValue(upstreamError)
+
+    const fallback: AxiosResponse = {
+      data: 'fallback',
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {} as AxiosResponse['config'],
+    }
+    const hooks: HooksConfig = {
+      // Return an AxiosResponse to suppress the original error.
+      onError: (_verb, _args, _error) => fallback,
+    }
+    const client = new HookableHttpService(stubHttp as unknown as HttpServiceLike, hooks)
+
+    const result = await client.get('/x')
+
+    // No throw — the synthetic response substitutes for the upstream failure.
+    expect(result).toBe(fallback)
+    expect(result.data).toBe('fallback')
+  })
+
+  it('AC-10: onError returning undefined rethrows the original error (passthrough)', async () => {
+    const stubHttp = buildHttpServiceStub(successResponse)
+    const upstreamError = new Error('boom')
+    stubHttp.get.mockRejectedValue(upstreamError)
+
+    const hooks: HooksConfig = {
+      // `undefined` is the documented passthrough sentinel for onError —
+      // the dispatch override MUST rethrow rather than resolve with `undefined`.
+      onError: () => undefined,
+    }
+    const client = new HookableHttpService(stubHttp as unknown as HttpServiceLike, hooks)
+
+    // Identity check: the SAME error instance must surface so the caller's
+    // catch handler observes the original failure (not a wrapped/replaced one).
+    await expect(client.get('/x')).rejects.toBe(upstreamError)
+  })
+
+  it('AC-19: all three hooks returning undefined behaves identically to no-hooks construction', async () => {
+    // Two parallel clients, one with all-undefined hooks, one with no hooks.
+    // The pair lets the spec assert behavioural identity (same upstream args,
+    // same response identity) on both the success and error paths.
+    const allUndefinedHooks: HooksConfig = {
+      onInvoke: () => undefined,
+      onReturn: () => undefined,
+      onError: () => undefined,
+    }
+
+    // Success path — upstream args and the resolved response must match.
+    {
+      const stubWithHooks = buildHttpServiceStub(successResponse)
+      const stubWithoutHooks = buildHttpServiceStub(successResponse)
+      const withHooks = new HookableHttpService(
+        stubWithHooks as unknown as HttpServiceLike,
+        allUndefinedHooks,
+      )
+      const withoutHooks = new HookableHttpService(
+        stubWithoutHooks as unknown as HttpServiceLike,
+      )
+
+      const headers = { 'x-original': 'caller' }
+      const resultWith = await withHooks.get('/x', { headers })
+      const resultWithout = await withoutHooks.get('/x', { headers })
+
+      // Both upstreams observe IDENTICAL args — proving onInvoke's `undefined`
+      // return is a true passthrough rather than a no-op replacement.
+      expect(stubWithHooks.get).toHaveBeenCalledWith('/x', { headers })
+      expect(stubWithoutHooks.get).toHaveBeenCalledWith('/x', { headers })
+      // Both callers observe the SAME response instance — proving onReturn's
+      // `undefined` preserves response identity (no `{ ...response }` clone).
+      expect(resultWith).toBe(successResponse)
+      expect(resultWithout).toBe(successResponse)
+    }
+
+    // Error path — the original error must surface unchanged.
+    {
+      const stubWithHooks = buildHttpServiceStub(successResponse)
+      const stubWithoutHooks = buildHttpServiceStub(successResponse)
+      const upstreamError = new Error('boom')
+      stubWithHooks.get.mockRejectedValue(upstreamError)
+      stubWithoutHooks.get.mockRejectedValue(upstreamError)
+
+      const withHooks = new HookableHttpService(
+        stubWithHooks as unknown as HttpServiceLike,
+        allUndefinedHooks,
+      )
+      const withoutHooks = new HookableHttpService(
+        stubWithoutHooks as unknown as HttpServiceLike,
+      )
+
+      // Identical rejection identity proves onError's `undefined` rethrows
+      // the ORIGINAL error rather than wrapping it in a derived value.
+      await expect(withHooks.get('/x')).rejects.toBe(upstreamError)
+      await expect(withoutHooks.get('/x')).rejects.toBe(upstreamError)
+    }
+  })
+
+  it('AC-20: onInvoke returning Promise<InvokeArgs> is awaited; resolved value is used and ~50ms delay is observable', async () => {
+    const stubHttp = buildHttpServiceStub(successResponse)
+    const asyncDelayMs = 50
+    const hooks: HooksConfig = {
+      // Async hook — returns a Promise that resolves AFTER a measurable delay
+      // with a transformed carrier. Proves both (a) the dispatch override
+      // awaits the hook return value and (b) the resolved value is used as
+      // the args (not discarded because it arrived asynchronously).
+      onInvoke: async (_verb, args) => {
+        await new Promise((resolve) => setTimeout(resolve, asyncDelayMs))
+        return {
+          ...args,
+          config: {
+            ...args.config,
+            headers: { ...(args.config.headers ?? {}), 'X-Async': '1' },
+          },
+        }
+      },
+    }
+    const client = new HookableHttpService(stubHttp as unknown as HttpServiceLike, hooks)
+
+    const startedAt = Date.now()
+    await client.get('/x')
+    const elapsedMs = Date.now() - startedAt
+
+    // The transformed header reaches the upstream — proves the resolved value
+    // of the Promise was used as the new args.
+    expect(stubHttp.get).toHaveBeenCalledWith('/x', { headers: { 'X-Async': '1' } })
+    // The caller's promise resolves no earlier than ~50 ms after invocation —
+    // proves the dispatch override awaited the hook's Promise rather than
+    // discarding it. A small (-5 ms) tolerance accounts for timer-resolution
+    // variance on slower runners; the load-bearing assertion is "not faster
+    // than the hook's delay", not exactness.
+    expect(elapsedMs).toBeGreaterThanOrEqual(asyncDelayMs - 5)
   })
 })

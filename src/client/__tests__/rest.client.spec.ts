@@ -1,4 +1,4 @@
-import { of, throwError } from 'rxjs'
+import { defer, of, throwError } from 'rxjs'
 import {
   BulkheadPolicy,
   CircuitBreakerPolicy,
@@ -13,6 +13,7 @@ import { RestClient } from '../rest.client'
 import { resiliencePolicyBuilder } from '../resailencePolicyBuilder'
 import { ResilencePresets } from '../../resilence.policy'
 import type { ResilanceConfig } from '../resilance.config'
+import type { HooksConfig } from '../hookable-http.service'
 
 /**
  * Stub policy that immediately invokes the executor with a deterministic
@@ -39,7 +40,7 @@ function buildStubPolicy(signal: AbortSignal): IPolicy<IDefaultPolicyContext, un
 
 /**
  * Minimal `HttpService`-shaped stub. Each verb returns the configured
- * `Observable<AxiosResponse>` so the {@link HookableHttpService} dispatcher
+ * `Observable<AxiosResponse>` so the {@link BaseHttpService} dispatcher
  * can unwrap it via `firstValueFrom` exactly the same way as the real
  * `HttpService`.
  */
@@ -634,6 +635,142 @@ describe('RestClient', () => {
       const client = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
 
       expect(client.axiosRef).toBe(stubHttp.axiosRef)
+    })
+  })
+
+  describe('hooks lifecycle (constructor `hooks` parameter)', () => {
+    it('AC-11: forwards `hooks` to HookableHttpService — `onInvoke` runs once with (verb, args) on a successful call', async () => {
+      // AC-11 pins the public contract that `new RestClient(httpService,
+      // undefined, hooks)` actually wires the third constructor argument
+      // through to the inherited `HookableHttpService` dispatch lifecycle.
+      // The success path: onInvoke MUST be invoked exactly once with the
+      // canonical `(verb, { url, config })` carrier shape RestClient builds.
+      const onInvoke: jest.Mock = jest.fn()
+      const stubHttp = buildHttpServiceStub(successResponse)
+
+      const hooks: HooksConfig = { onInvoke }
+      // Pass `undefined` for `config` so RestClient applies the CONSERVATIVE
+      // default — proves the hooks slot is the THIRD positional arg.
+      const client = new RestClient(
+        stubHttp as unknown as ConstructorParameters<typeof RestClient>[0],
+        undefined,
+        hooks,
+      )
+
+      const result = await client.get('/x')
+
+      // Exactly one invocation under the success path — `onReturn`
+      // (not under test here) would replace the response, but `onInvoke`
+      // fires before any policy/transport work and only once on a
+      // single-attempt success.
+      expect(onInvoke).toHaveBeenCalledTimes(1)
+      // The args carrier built by RestClient.get is `{ url, config }`.
+      // `config` is materialised from the optional second arg — when omitted
+      // it defaults to an empty object via the BaseHttpService verb helper.
+      expect(onInvoke).toHaveBeenCalledWith(
+        'get',
+        expect.objectContaining({ url: '/x', config: expect.any(Object) }),
+      )
+      expect(result).toBe(successResponse)
+    })
+
+    it('AC-21: hooks wrap INSIDE the resilience pipeline — `onInvoke` re-runs on every retry attempt (3 total)', async () => {
+      // AC-21 is the architectural contract that hooks observe per-attempt
+      // semantics, not per-call semantics. The dispatch override in
+      // RestClient calls `super.dispatch(verb, args')` from INSIDE
+      // `policy.execute(...)`. Every retry iteration of the policy executor
+      // re-enters HookableHttpService.dispatch, which re-invokes onInvoke.
+      //
+      // We verify this end-to-end with a real cockatiel retry policy:
+      //   - `maxAttempts: 3` -> up to 3 retries -> up to 4 total calls
+      //   - `backoff: 0` -> deterministic, no real wall-clock delay
+      //   - upstream emits 500, 500, 200 in sequence
+      //
+      // If hooks lived OUTSIDE the policy (e.g. the dispatch override called
+      // hooks once before invoking policy.execute), the spy would fire only
+      // once. The "3 invocations" assertion is what makes this test prove
+      // the inside-pipeline contract rather than just the wiring.
+
+      // Counter incremented on every fresh inbound subscription. `defer(...)`
+      // re-evaluates its factory on every subscribe, so each retry attempt
+      // produces a fresh observable from a fresh response choice.
+      let inboundCount = 0
+      const error500 = new Error('upstream-500') as Error & {
+        isAxiosError: boolean
+        config?: { method: string }
+        response?: { status: number }
+      }
+      // Mark the error as an axios 5xx GET so the CONSERVATIVE-style
+      // shouldRetry default (isRetryableError) matches it. Without this the
+      // retry policy would give up immediately and the test would not
+      // exercise per-attempt hook re-invocation.
+      error500.isAxiosError = true
+      error500.config = { method: 'GET' }
+      error500.response = { status: 500 }
+
+      const onInvoke: jest.Mock = jest.fn()
+
+      const stubHttp = buildHttpServiceStub(successResponse)
+      // Override `get` to return a deferred observable — `defer` re-runs the
+      // factory per subscription so attempt N can return a different result
+      // from attempt N-1. This is the exact pattern the docstring suggests
+      // for AC-21 verification.
+      stubHttp.get.mockImplementation(() =>
+        defer(() => {
+          inboundCount += 1
+          if (inboundCount < 3) {
+            return throwError(() => error500)
+          }
+          return of(successResponse)
+        }),
+      )
+
+      // Real cockatiel retry policy with maxAttempts=3 and constant 0 backoff
+      // (no fake timers needed). The `shouldRetry` predicate matches our
+      // synthetic axios 500, so attempts 1 and 2 retry into attempt 3 which
+      // succeeds. Three total inbound subscriptions are expected.
+      const config: ResilanceConfig<unknown> = {
+        retry: {
+          maxAttempts: 3,
+          backoff: 0,
+        },
+      }
+      const hooks: HooksConfig = { onInvoke }
+
+      const client = new RestClient(
+        stubHttp as unknown as ConstructorParameters<typeof RestClient>[0],
+        config,
+        hooks,
+      )
+
+      const result = await client.get('/x')
+
+      // The caller's promise resolves with the THIRD (200) response —
+      // anything else means either retry stopped early or the wrong attempt
+      // was returned.
+      expect(result).toBe(successResponse)
+
+      // The upstream observed exactly three subscriptions: two failures and
+      // the successful third. `inboundCount` is incremented inside the
+      // `defer` factory so it counts SUBSCRIPTIONS, not pre-built observables.
+      expect(inboundCount).toBe(3)
+      expect(stubHttp.get).toHaveBeenCalledTimes(3)
+
+      // The load-bearing assertion: `onInvoke` runs ONCE PER ATTEMPT, not
+      // once per public-verb call. Three retry iterations of `policy.execute`
+      // means three re-entries into HookableHttpService.dispatch, which
+      // means three onInvoke invocations. If this were wired the wrong way
+      // round (hooks outside policy.execute) the count would be 1.
+      expect(onInvoke).toHaveBeenCalledTimes(3)
+      // Every invocation observed the same logical verb + url; the `config`
+      // field carries the merged AbortSignal injected by RestClient.dispatch
+      // for that attempt, so we match it loosely with `expect.any(Object)`.
+      for (const call of onInvoke.mock.calls) {
+        expect(call[0]).toBe('get')
+        expect(call[1]).toEqual(
+          expect.objectContaining({ url: '/x', config: expect.any(Object) }),
+        )
+      }
     })
   })
 })

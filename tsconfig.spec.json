@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    "emitDecoratorMetadata": false,
+    "types": ["node", "jest"],
+    "noUnusedLocals": false
+  },
+  "include": [
+    "src",
+    "src/**/__tests__/**/*.ts",
+    "src/**/*.spec.ts"
+  ],
+  "exclude": [
+    "jest.config.ts",
+    "jest.e2e.config.ts"
+  ]
+}

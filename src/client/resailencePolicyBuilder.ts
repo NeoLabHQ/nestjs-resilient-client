@@ -66,7 +66,7 @@ const isBackoffFactory = (value: unknown): value is IBackoffFactory<IRetryBackof
     'next' in value &&
     typeof (value as { next: unknown }).next === 'function';
 
-export const buildRetryPolicy = <T, S = void, R = unknown>(config: RetryConfig<T, S>): RetryPolicy => {
+export const buildRetryPolicy = <T, R = unknown>(config: RetryConfig<T>): RetryPolicy => {
     const backoff: IBackoffFactory<IRetryBackoffContext<T>> = 
         typeof config.backoff === 'number' ? new ConstantBackoff(config.backoff)
         : config.backoff instanceof Array ? new IterableBackoff(config.backoff) 
