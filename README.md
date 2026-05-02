@@ -23,7 +23,6 @@ Drop in replacement for `@nestjs/axios` `HttpService` with retries, circuit brea
 
 </div>
 
-
 Zero-configuration resilience and transient-fault-handling HTTP client based on the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack. 
 
 > The `cockatiel` library is a great reimplementation of the famous [Polly](https://github.com/App-vNext/Polly) library for the JS/TS ecosystem, but unfortunately it has an overcomplicated API and lacks a default preset that can fulfill most services' retry needs out of the box. This library does exactly that. You can simply replace the default `@nestjs/axios` `HttpService` with `RestClient` and you will get a fully resilient HTTP client out of the box.
