@@ -1,6 +1,30 @@
-# NestJS HTTP Client
+<p align="center">
+  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+</p>
 
-Zero-configuration resilience and transient-fault-handling HTTP client that wraps the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack. 
+<div align="center">
+
+<h1>NestJS HTTP Client</h1>
+
+![Build Status](https://github.com/neolabhq/nestjs-http-client/actions/workflows/verify.yaml/badge.svg)
+[![npm version](https://img.shields.io/npm/v/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
+[![Bundle Size](https://img.shields.io/bundlephobia/minzip/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
+[![NPM Downloads](https://img.shields.io/npm/dw/nestjs-http-client)](https://www.npmjs.com/package/nestjs-http-client)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
+
+Drop in replacement for `@nestjs/axios` `HttpService` with retries, circuit breakers, bulkheads, timeout, fallbacks and other resilience patterns integrated.
+
+[Quick Start](#quick-start) •
+[Resilience Patterns](#resilience-patterns) •
+[Usage](#usage) •
+[Configuration Strategies](#configuration-strategies) •
+[API Reference](#api-reference) •
+[Special Thanks](#special-thanks)
+
+</div>
+
+
+Zero-configuration resilience and transient-fault-handling HTTP client based on the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack. 
 
 > The `cockatiel` library is great reimplementation of famous [Polly](https://github.com/App-vNext/Polly) library for JS/TS ecosystem, but unfortunatelly it is have overcomplicated API, and lacks default preset that can fullfill most of the services retry needs out of the box. This library doing exactly that. You can simply replace default `@nestjs/axios` `HttpService` with `RestClient` and you will get fully resilient HTTP client out of the box.
 
