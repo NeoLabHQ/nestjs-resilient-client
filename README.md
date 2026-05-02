@@ -26,7 +26,7 @@ Drop in replacement for `@nestjs/axios` `HttpService` with retries, circuit brea
 
 Zero-configuration resilience and transient-fault-handling HTTP client based on the official `@nestjs/axios` `HttpService` with a [cockatiel](https://github.com/connor4312/cockatiel)-based resilience policy stack. 
 
-> The `cockatiel` library is great reimplementation of famous [Polly](https://github.com/App-vNext/Polly) library for JS/TS ecosystem, but unfortunatelly it is have overcomplicated API, and lacks default preset that can fullfill most of the services retry needs out of the box. This library doing exactly that. You can simply replace default `@nestjs/axios` `HttpService` with `RestClient` and you will get fully resilient HTTP client out of the box.
+> The `cockatiel` library is a great reimplementation of the famous [Polly](https://github.com/App-vNext/Polly) library for the JS/TS ecosystem, but unfortunately it has an overcomplicated API and lacks a default preset that can fulfill most services' retry needs out of the box. This library does exactly that. You can simply replace the default `@nestjs/axios` `HttpService` with `RestClient` and you will get a fully resilient HTTP client out of the box.
 
 ## Features
 
@@ -88,11 +88,11 @@ export class CatalogService {
 
 ## Resilience Patterns
 
-The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default enabled only reactive resilience patterns, with reasonable exceptions, for example timeout on obviusly too long request. On top of that retry mechanism is work based on type and status of requests. It will try to retry only idempotent requests: GET, HEAD, OPTIONS. And only for 5xx status codes. While PUT, DELETE also considered idempotent in properly implemented RESTfull API, in reality they usualy not. This default strategy is called "Conservative".
+The default configuration assumes the upstream API is healthy until it is not, and only retries genuinely idempotent requests on transient failures. By default, only reactive resilience patterns are enabled, with reasonable exceptions — for example, a timeout on an obviously too-long request. On top of that, the retry mechanism works based on the type and status of requests. It retries only idempotent requests: GET, HEAD, OPTIONS, and only for 5xx status codes. While PUT and DELETE are also considered idempotent in a properly implemented RESTful API, in reality they usually are not. This default strategy is called "Conservative".
 
 Other presets "RESTfull" and "Low Quality" trade off retry aggressiveness against the trust you place in the upstream API.
 
-> Presets is based on years of development experience of the authors, rather than theoretical best practices. As a result, they are pragmatic and should work as you expect, without need to tweak them for "bad" upstream APIs.
+> Presets are based on years of development experience of the authors, rather than theoretical best practices. As a result, they are pragmatic and should work as you expect, without the need to tweak them for "bad" upstream APIs.
 
 ### Reactive Resilience Patterns
 
@@ -527,7 +527,7 @@ export class AppModule {}
 
 `AuthRestModule` will inject `AuthRestClient` into any service. Each request method automatically:
 
-1. Calls `BearerTokenStrategy.isAuthenticated()`, if it `false`, calls `BearerTokenStrategy.authenticate()` (single request, concurrent callers share same request).
+1. Calls `BearerTokenStrategy.isAuthenticated()`, and if it is `false`, calls `BearerTokenStrategy.authenticate()` (single request, concurrent callers share the same request).
 2. Augments the request via `BearerTokenStrategy.extendRequest(config)` 
 3. On a single HTTP 401 response, calls `BearerTokenStrategy.invalidate()`, then re-authenticates  `BearerTokenStrategy.authenticate()`, and retries the underlying request once.
 
