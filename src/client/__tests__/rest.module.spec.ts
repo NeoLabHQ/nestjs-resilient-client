@@ -5,9 +5,15 @@ import type { AxiosError, AxiosResponse } from 'axios'
 import { CircuitBreakerPolicy, RetryPolicy, TimeoutPolicy } from 'cockatiel'
 import { of, throwError } from 'rxjs'
 
+import { ResilencePresets } from '../../resilence.policy'
+import type { HooksConfig } from '../hookable-http.service'
 import type { ResilanceConfig } from '../resilance.config'
 import { RestClient } from '../rest.client'
-import { REST_MODULE_OPTIONS, RestModule } from '../rest.module'
+import {
+  REST_MODULE_OPTIONS,
+  RestModule,
+  resolveResilience,
+} from '../rest.module'
 import type { RestFromHttpServiceOptions } from '../rest.module'
 
 /**
@@ -320,7 +326,7 @@ describe('RestModule.forHttpService', () => {
   /**
    * Builds a minimal stub for the pre-resolved {@link HttpService}. The stub
    * mirrors the shape {@link RestClient} needs: a `get` mock so the
-   * {@link HookableHttpService} dispatch path can delegate through it.
+   * {@link BaseHttpService} dispatch path can delegate through it.
    */
   function buildHttpServiceStub(response: AxiosResponse): Partial<HttpService> {
     return {
@@ -397,5 +403,174 @@ describe('RestModule.forHttpService', () => {
     expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
     const retryOptions = (wrapped[0] as unknown as { options: { maxAttempts: number } }).options
     expect(retryOptions.maxAttempts).toBe(1)
+  })
+})
+
+describe('RestModule zero-config import (AC-15)', () => {
+  it('AC-15: `Test.createTestingModule({ imports: [RestModule] })` resolves a usable RestClient with the CONSERVATIVE default', async () => {
+    // Pins the class-level `@Module({...})` contract: `imports: [RestModule]`
+    // (NO factory call, NO forRootAsync) MUST yield a RestClient instance with
+    // the documented CONSERVATIVE-preset defaults. Regression guard against
+    // the previous `@Module({})` (empty providers) shape that required every
+    // consumer to call `forRootAsync` to receive a usable client.
+    const moduleRef = await Test.createTestingModule({
+      imports: [RestModule],
+    }).compile()
+
+    const restClient = moduleRef.get(RestClient)
+    expect(restClient).toBeInstanceOf(RestClient)
+
+    // CONSERVATIVE preset = retry → timeout(60 s) → circuitBreaker.
+    // The same structural shape the `forRootAsync` default-fallback path
+    // produces, asserted here so consumers cannot end up with an
+    // accidentally-different default surface depending on import style.
+    const wrapped = (restClient.policy as unknown as { wrapped: unknown[] }).wrapped
+    expect(wrapped).toHaveLength(3)
+    expect(wrapped[0]).toBeInstanceOf(RetryPolicy)
+    expect(wrapped[1]).toBeInstanceOf(TimeoutPolicy)
+    expect(wrapped[2]).toBeInstanceOf(CircuitBreakerPolicy)
+  })
+
+  it('AC-15: `client.get(...)` on the zero-config RestClient does not throw — DI resolution is end-to-end functional', async () => {
+    // Beyond `instanceof RestClient`, this test exercises the full call path:
+    // verb dispatch → resilience policy → underlying HttpService stub. If the
+    // class-level @Module wired the wrong HttpService (or none at all), the
+    // call would throw on resolution rather than return a response.
+    const moduleRef = await Test.createTestingModule({
+      imports: [RestModule],
+    })
+      .overrideProvider(HttpService)
+      .useValue({ get: jest.fn(() => of(successResponse)) })
+      .compile()
+
+    const restClient = moduleRef.get(RestClient)
+
+    await expect(restClient.get('/x')).resolves.toBe(successResponse)
+  })
+})
+
+describe('resolveResilience truth table', () => {
+  // The four-case truth table is documented on `resolveResilience` itself.
+  // Each test pins ONE row so a regression in any branch is attributable to
+  // a specific cell rather than a generic helper failure.
+
+  it('AC-1: axios.timeout > 0 AND resilience absent → strips CONSERVATIVE preset timeout', () => {
+    // The axios-wins case: when the consumer set `axios.timeout` and did NOT
+    // express their own resilience opinion, the helper applies the CONSERVATIVE
+    // preset but strips the per-attempt timeout so the cockatiel pipeline does
+    // not impose a SECOND deadline shadowing the axios one.
+    const result = resolveResilience({ axios: { timeout: 5_000 } })
+
+    // The returned value must be the CONSERVATIVE preset shape with the
+    // timeout slot zeroed — `timeout: undefined` is what
+    // `resiliencePolicyBuilder` checks for to skip the TimeoutPolicy attach.
+    expect(result).toBeDefined()
+    expect(result?.timeout).toBeUndefined()
+
+    // Other CONSERVATIVE fields MUST still be present (retry + circuitBreaker)
+    // — the helper only tweaks `timeout`. If a future refactor accidentally
+    // dropped the rest of the preset, this assertion catches it.
+    expect(result?.retry).toBe(ResilencePresets.CONSERVATIVE.retry)
+    expect(result?.circuitBreaker).toBe(ResilencePresets.CONSERVATIVE.circuitBreaker)
+  })
+
+  it('AC-2: axios.timeout > 0 AND resilience present → user resilience preserved unchanged', () => {
+    // The user-wins case: when the consumer supplies their own `resilience`,
+    // it MUST be returned verbatim. The helper does not second-guess the user
+    // (e.g. by merging in the CONSERVATIVE preset) — `===` equality with the
+    // input proves the absence of any defensive cloning.
+    const userResilience: ResilanceConfig<unknown> = { timeout: 1_000 }
+
+    const result = resolveResilience({
+      axios: { timeout: 5_000 },
+      resilience: userResilience,
+    })
+
+    expect(result).toBe(userResilience)
+    expect(result?.timeout).toBe(1_000)
+  })
+
+  it('AC-22: axios.timeout === 0 AND resilience absent → returns undefined (no stripping)', () => {
+    // axios `timeout: 0` is the documented "disabled" sentinel. It does NOT
+    // mean "I want axios to drive the deadline" — it means "no axios-driven
+    // timeout at all". The helper therefore does not strip the preset
+    // timeout; the call site falls back to CONSERVATIVE via `?? CONSERVATIVE`.
+    const result = resolveResilience({ axios: { timeout: 0 } })
+
+    expect(result).toBeUndefined()
+  })
+
+  it('axios undefined AND resilience absent → returns undefined (caller had no opinion)', () => {
+    // The "no opinion at all" case: both axios and resilience are absent, so
+    // the helper has nothing to reconcile. The call site applies the
+    // CONSERVATIVE default via `?? CONSERVATIVE` exactly as it would for
+    // a factory that omits both fields.
+    const result = resolveResilience({})
+
+    expect(result).toBeUndefined()
+  })
+
+  it('axios undefined AND resilience present → returns the user resilience unchanged', () => {
+    // Without an axios.timeout to reconcile against, the user's resilience
+    // is the unambiguous answer. Same `===` identity guarantee as the
+    // axios.timeout > 0 case to prove no cloning.
+    const userResilience: ResilanceConfig<unknown> = {
+      retry: { maxAttempts: 7, backoff: 0, shouldRetry: () => true },
+    }
+
+    const result = resolveResilience({ resilience: userResilience })
+
+    expect(result).toBe(userResilience)
+  })
+
+  it('axios.timeout === 0 AND resilience present → user resilience preserved unchanged', () => {
+    // Combines AC-22 (axios=0 is "disabled") with AC-2 (user wins). The
+    // user's resilience is returned regardless of whether axios.timeout was
+    // explicitly disabled or simply absent.
+    const userResilience: ResilanceConfig<unknown> = { timeout: 2_500 }
+
+    const result = resolveResilience({
+      axios: { timeout: 0 },
+      resilience: userResilience,
+    })
+
+    expect(result).toBe(userResilience)
+  })
+})
+
+describe('RestModule.forRootAsync hooks wiring (AC-13)', () => {
+  it('AC-13: factory-supplied `hooks.onInvoke` runs when the DI-resolved RestClient invokes `get(...)`', async () => {
+    // Pins the contract that `RestModuleOptions.hooks` is forwarded as the
+    // third positional arg to `new RestClient(...)` so the HookableHttpService
+    // lifecycle observes every dispatched verb. If the factory wiring dropped
+    // the hooks (e.g. by reading `opts.resilience` only), the spy would never
+    // fire and this assertion would catch the regression.
+    const onInvoke: jest.Mock = jest.fn()
+    const httpServiceStub = { get: jest.fn(() => of(successResponse)) }
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        RestModule.forRootAsync({
+          useFactory: (): { hooks: HooksConfig } => ({
+            hooks: { onInvoke },
+          }),
+        }),
+      ],
+    })
+      .overrideProvider(HttpService)
+      .useValue(httpServiceStub)
+      .compile()
+
+    const restClient = moduleRef.get(RestClient)
+    await restClient.get('/x')
+
+    // Exactly one onInvoke per single-attempt success — same contract pinned
+    // by `rest.client.spec.ts` AC-11 but exercised here at the DI-resolution
+    // layer rather than via direct constructor instantiation.
+    expect(onInvoke).toHaveBeenCalledTimes(1)
+    expect(onInvoke).toHaveBeenCalledWith(
+      'get',
+      expect.objectContaining({ url: '/x', config: expect.any(Object) }),
+    )
   })
 })

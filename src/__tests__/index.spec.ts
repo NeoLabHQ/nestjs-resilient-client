@@ -1,6 +1,6 @@
 import * as publicSurface from '../index'
 
-import { HookableHttpService } from '../client/hookable-http.service'
+import { BaseHttpService, HookableHttpService } from '../client/hookable-http.service'
 import { RestClient } from '../client/rest.client'
 import { RestModule } from '../client/rest.module'
 import { AuthRestClient } from '../auth/auth-rest.client'
@@ -10,6 +10,18 @@ import {
   ResilencePresets as DirectResilencePresets,
   resiliencePolicyPresets as directResiliencePolicyPresets,
 } from '../resilence.policy'
+
+// Type-only imports — re-imported from the BARREL (not the source modules) so
+// the smoke spec exercises the public surface end-to-end. If any of these type
+// re-exports goes missing, this file fails to typecheck before any runtime
+// assertion has a chance to run.
+import type {
+  HooksConfig,
+  DeduplicationConfig,
+  RateLimiterConfig,
+  ThrottlingConfig,
+  AuthRestModuleOptions,
+} from '../index'
 
 /**
  * The package's barrel file (`src/index.ts`) is the consumer-facing surface.
@@ -23,8 +35,55 @@ import {
  */
 describe('public surface (src/index.ts)', () => {
   describe('runtime class re-exports', () => {
-    it('exports the HookableHttpService base class identical to the source class', () => {
+    it('exports the BaseHttpService base class identical to the source class', () => {
+      expect(publicSurface.BaseHttpService).toBe(BaseHttpService)
+    })
+
+    it('AC-7: BaseHttpService is exported as a constructor function (the abstract marker is a type-only assertion)', () => {
+      // `abstract` is erased at runtime — TypeScript prevents direct
+      // instantiation at compile time, but the emitted JavaScript is a normal
+      // constructor function. Asserting `typeof === 'function'` plus the
+      // `prototype` slot pins the runtime metadata that downstream subclasses
+      // (RestClient, AuthRestClient, HookableHttpService) rely on.
+      expect(typeof publicSurface.BaseHttpService).toBe('function')
+      expect(publicSurface.BaseHttpService.prototype).toBeDefined()
+    })
+
+    it('AC-7: HookableHttpService is exported as a concrete subclass of BaseHttpService', () => {
+      // Identity equality with the source class proves the barrel re-export
+      // hasn't been shadowed; the prototype-chain check pins the inheritance
+      // relationship documented in README ("HookableHttpService is the new
+      // concrete subclass of BaseHttpService").
       expect(publicSurface.HookableHttpService).toBe(HookableHttpService)
+      expect(typeof publicSurface.HookableHttpService).toBe('function')
+      expect(Object.getPrototypeOf(publicSurface.HookableHttpService)).toBe(
+        publicSurface.BaseHttpService,
+      )
+    })
+
+    it('AC-7: HookableHttpService accepts (httpService, hooks?) and produces a working instance', () => {
+      // Smoke-construct a HookableHttpService with a minimal HttpServiceLike
+      // stub plus an empty hooks object. This exercises the documented
+      // (httpService, hooks?) constructor surface end-to-end through the
+      // public barrel — drift in the constructor signature would surface as a
+      // TypeScript compilation error before the assertion runs.
+      const stubHttp = {
+        axiosRef: {} as never,
+        request: () => undefined,
+        get: () => undefined,
+        delete: () => undefined,
+        head: () => undefined,
+        post: () => undefined,
+        put: () => undefined,
+        patch: () => undefined,
+        postForm: () => undefined,
+        putForm: () => undefined,
+        patchForm: () => undefined,
+      }
+      const hooks: HooksConfig = {}
+      const instance = new publicSurface.HookableHttpService(stubHttp, hooks)
+      expect(instance).toBeInstanceOf(publicSurface.HookableHttpService)
+      expect(instance).toBeInstanceOf(publicSurface.BaseHttpService)
     })
 
     it('exports the RestClient class identical to the source class', () => {
@@ -78,18 +137,70 @@ describe('public surface (src/index.ts)', () => {
     })
   })
 
+  describe('type-only re-exports', () => {
+    // Type-only exports vanish at runtime, so the assertions in this block are
+    // intentionally type-level — the file fails to typecheck (and therefore
+    // the whole spec fails to run) if a type re-export goes missing from the
+    // barrel. The runtime `expect(true)` is a placeholder so Jest reports the
+    // test as executed once the type imports have been resolved.
+
+    it('re-exports HooksConfig from the barrel as a type-only export', () => {
+      // Compile-time check: assigning an object literal that satisfies the
+      // documented passthrough sentinel proves the type was re-exported with
+      // the same shape as the source declaration.
+      const config: HooksConfig = {
+        onInvoke: (_verb, args) => args,
+        onReturn: (_verb, _args, response) => response,
+        onError: () => undefined,
+      }
+      expect(config).toBeDefined()
+    })
+
+    it('re-exports DeduplicationConfig, RateLimiterConfig, ThrottlingConfig from the barrel as type-only exports', () => {
+      // Compile-time checks: each interface carries the documented required
+      // fields. Drift in any field — for example renaming `refillRatePerSec`
+      // or making `strategy` optional — is caught here at typecheck time.
+      const dedup: DeduplicationConfig = {
+        keyBuilder: (verb, args) => `${verb}:${args.url ?? ''}`,
+      }
+      const limiter: RateLimiterConfig = {
+        strategy: 'token-bucket',
+        capacity: 10,
+        refillRatePerSec: 5,
+      }
+      const throttler: ThrottlingConfig = {
+        requestsPerInterval: 100,
+        intervalMs: 60_000,
+      }
+      expect(dedup).toBeDefined()
+      expect(limiter).toBeDefined()
+      expect(throttler).toBeDefined()
+    })
+
+    it('re-exports AuthRestModuleOptions from the barrel as a type-only export', () => {
+      // Compile-time check: AuthRestModuleOptions extends RestModuleOptions, so
+      // a literal carrying the inherited `axios` / `resilience` slots
+      // typechecks against the re-exported shape.
+      const options: AuthRestModuleOptions = {}
+      expect(options).toBeDefined()
+    })
+  })
+
   describe('exhaustive named export list', () => {
     it('exports exactly the runtime + enum + lookup symbols documented in README', () => {
       // Type-only exports (AuthStrategy, ResilanceConfig, HttpVerb, InvokeArgs,
-      // RestModuleOptions, RestFromHttpServiceOptions, etc.) are erased at
-      // runtime; the runtime keys must therefore be exactly the symbols below.
-      // Drift here is a public-API change.
+      // RestModuleOptions, RestFromHttpServiceOptions, HooksConfig,
+      // DeduplicationConfig, RateLimiterConfig, ThrottlingConfig,
+      // AuthRestModuleOptions, etc.) are erased at runtime; the runtime keys
+      // must therefore be exactly the symbols below. Drift here is a
+      // public-API change.
       const actualKeys = Object.keys(publicSurface).sort()
       expect(actualKeys).toEqual(
         [
           'AuthProcessor',
           'AuthRestClient',
           'AuthRestModule',
+          'BaseHttpService',
           'HookableHttpService',
           'REST_MODULE_OPTIONS',
           'ResilencePresets',

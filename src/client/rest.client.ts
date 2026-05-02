@@ -8,9 +8,10 @@ import type {
 import type { Loggable } from 'nestjs-log-decorator'
 
 import { ResilencePresets } from '../resilence.policy'
-import { HookableHttpService, type HttpVerb, type InvokeArgs } from './hookable-http.service'
+import { HookableHttpService, type HooksConfig, type HttpVerb, type InvokeArgs } from './hookable-http.service'
 import { resiliencePolicyBuilder } from './resailencePolicyBuilder'
 import type { ResilanceConfig } from './resilance.config'
+import { buildRxjsPipeline } from './rxjs-pipeline'
 
 /**
  * Composes the user-supplied `AbortSignal` (if any) with cockatiel's policy
@@ -55,11 +56,18 @@ function mergeSignal(
  * Resilient HTTP client that wraps `@nestjs/axios`'s `HttpService` and runs
  * every request through a composed cockatiel `IPolicy`.
  *
- * `RestClient` extends {@link HookableHttpService} for the verb surface and
- * overrides {@link HookableHttpService.dispatch} to wrap every dispatch in
- * `policy.execute(...)`. The `signal` from cockatiel's policy context is
- * forwarded into the verb's `AxiosRequestConfig` slot so retries, timeouts,
- * and circuit-breakers can cancel in-flight axios requests cooperatively.
+ * `RestClient` extends {@link HookableHttpService} for the verb surface plus
+ * the {@link HooksConfig} lifecycle (`onInvoke` / `onReturn` / `onError`), and
+ * overrides `dispatch` to wrap every invocation in `policy.execute(...)`. The
+ * `signal` from cockatiel's policy context is forwarded into the verb's
+ * `AxiosRequestConfig` slot so retries, timeouts, and circuit-breakers can
+ * cancel in-flight axios requests cooperatively.
+ *
+ * Because the override calls `super.dispatch(verb, args)` from inside
+ * `policy.execute(...)`, the hook lifecycle runs INSIDE the resilience
+ * pipeline — every retry attempt re-invokes `onInvoke`, observes the
+ * (possibly hook-transformed) args, and routes the response through `onReturn`
+ * (or `onError`). This is the contract pinned by AC-21.
  *
  * The {@link policy} field is `public readonly` so external consumers can
  * inspect or instrument the composed policy (e.g. for circuit-breaker state
@@ -122,11 +130,31 @@ export class RestClient extends HookableHttpService implements Loggable {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- IPolicy result type must be `any` because per-verb response shapes vary across calls
   readonly policy: IPolicy<IDefaultPolicyContext, any>
 
+  /**
+   * @param httpService Upstream `@nestjs/axios` HTTP transport.
+   * @param config Resilience pipeline configuration. Defaults to
+   *   {@link ResilencePresets.CONSERVATIVE}. Both the cockatiel policy stack
+   *   AND the RxJS pipeline (deduplication / rate-limiter / throttling) are
+   *   derived from this object — the latter is built once via
+   *   {@link buildRxjsPipeline} and forwarded to {@link HookableHttpService}'s
+   *   constructor so the reactive stages are applied inside `callUnderlying`.
+   * @param hooks Optional {@link HooksConfig} lifecycle. Forwarded verbatim to
+   *   {@link HookableHttpService} so `onInvoke` / `onReturn` / `onError`
+   *   bracket every `super.dispatch(...)` call. Because the dispatch override
+   *   wraps `super.dispatch` in `policy.execute(...)`, the hooks run INSIDE
+   *   the resilience pipeline — every retry attempt re-invokes `onInvoke`
+   *   with the carrier args (AC-21).
+   */
   constructor(
     httpService: HttpService,
     config: ResilanceConfig<unknown> = ResilencePresets.CONSERVATIVE,
+    hooks?: HooksConfig,
   ) {
-    super(httpService)
+    // Forward hooks AND the composed RxJS pipeline to HookableHttpService.
+    // `buildRxjsPipeline` returns `undefined` when none of the reactive fields
+    // (deduplication / rateLimiter / throttling) is set, so the dispatch
+    // fast-path stays branch-light for the common (cockatiel-only) case.
+    super(httpService, hooks, buildRxjsPipeline(config))
     this.policy = resiliencePolicyBuilder(config)
   }
 

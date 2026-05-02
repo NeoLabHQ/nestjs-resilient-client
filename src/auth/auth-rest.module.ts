@@ -1,51 +1,62 @@
-import { HttpModule, type HttpService } from '@nestjs/axios'
+import { HttpModule, HttpService } from '@nestjs/axios'
 import { type DynamicModule, Module, type Type } from '@nestjs/common'
 import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 
+import { ResilencePresets } from '../resilence.policy'
 import { RestClient } from '../client/rest.client'
-import type { ResilanceConfig } from '../client/resilance.config'
-import { RestModule } from '../client/rest.module'
+import { resolveResilience, type RestModuleOptions } from '../client/rest.module'
 import { AuthProcessor } from './auth-processor'
 import { AuthRestClient } from './auth-rest.client'
 import type { AuthStrategy } from './auth.config'
 
 /**
  * Options object resolved by the consumer-supplied async factory passed to
- * {@link AuthRestModule.forRootAsync}. Carries the runtime collaborators the
- * module needs to wire up the authenticated transport stack:
+ * {@link AuthRestModule.forRootAsync}.
  *
- * - `httpService` — the upstream `@nestjs/axios` `HttpService` used to perform
- *   the actual network calls. Consumers typically obtain it from `HttpModule`
- *   (already imported by this module) via `inject: [HttpService]`.
- * - `resilience` — optional resilience policy configuration. When omitted, the
- *   module falls back to `ResilencePresets.CONSERVATIVE` inside the
- *   {@link RestClient} provider factory (see "AuthRestModule defaults to
- *   CONSERVATIVE preset" acceptance criterion).
+ * Extends {@link RestModuleOptions} with no additional fields — `AuthRestModule`
+ * now owns its own `HttpModule` registration (driven by `axios`), so consumers
+ * no longer supply `httpService` directly. This aligns the authenticated and
+ * unauthenticated module ergonomics: both are configured via the same
+ * `{ axios?, resilience?, hooks? }` shape.
  *
- * **Note on the strategy class:** the {@link AuthStrategy} *class token* is no
- * longer carried inside this options object — it is passed synchronously as the
- * top-level `authStrategy` field on {@link AuthRestModule.forRootAsync}'s
- * argument so the DI container can register it before the async factory
- * resolves. See {@link AuthRestModule.forRootAsync} for the full wiring.
+ * **Breaking change from pre-1.0:** the `httpService` field has been removed.
+ * Replace
+ * `useFactory: (h: HttpService) => ({ httpService: h })`
+ * with
+ * `useFactory: () => ({ axios: { baseURL: '...' } })`.
+ * The internal `HttpModule.registerAsync(...)` call now consumes
+ * `opts.axios` so the upstream transport is built once, in this module, with
+ * the consumer-supplied axios configuration.
+ *
+ * Inherited fields from {@link RestModuleOptions}:
+ *
+ * - `axios?` — forwarded verbatim to the internally-registered `HttpModule`
+ *   (`baseURL`, `timeout`, default headers, …).
+ * - `resilience?` — override the CONSERVATIVE default. When omitted, the module
+ *   falls back to `ResilencePresets.CONSERVATIVE` inside the
+ *   {@link RestClient} provider factory.
+ * - `hooks?` — `HookableHttpService` lifecycle hooks (`onInvoke` / `onReturn` /
+ *   `onError`) forwarded verbatim to the constructed {@link RestClient}.
+ *
+ * **Note on the strategy class:** the {@link AuthStrategy} *class token* is
+ * passed synchronously as the top-level `authStrategy` field on
+ * {@link AuthRestModule.forRootAsync}'s argument — it is *not* part of this
+ * options object — so the DI container can register it before the async
+ * factory resolves. See {@link AuthRestModule.forRootAsync} for the full
+ * wiring.
  *
  * @example
  * ```ts
- * import { HttpService } from '@nestjs/axios'
  * import type { AuthRestModuleOptions } from 'nestjs-http-client'
  *
  * // Returned by the useFactory callback in AuthRestModule.forRootAsync.
  * const options: AuthRestModuleOptions = {
- *   httpService: inject(HttpService),
+ *   axios: { baseURL: 'https://api.example.com' },
  *   // Omitting `resilience` applies the CONSERVATIVE preset automatically.
  * }
  * ```
  */
-export interface AuthRestModuleOptions {
-  /** Upstream `@nestjs/axios` HTTP transport used by the constructed {@link RestClient}. */
-  httpService: HttpService
-  /** Optional resilience policy stack; defaults to the CONSERVATIVE preset when absent. */
-  resilience?: ResilanceConfig<unknown>
-}
+export type AuthRestModuleOptions = RestModuleOptions
 
 /**
  * DI token under which the resolved {@link AuthRestModuleOptions} are
@@ -69,7 +80,7 @@ export interface AuthRestModuleOptions {
  *   ) {}
  *
  *   getBaseUrl(): string | undefined {
- *     return this.opts.httpService.axiosRef.defaults.baseURL
+ *     return this.opts.axios?.baseURL
  *   }
  * }
  * ```
@@ -263,38 +274,75 @@ export class AuthRestModule {
 
     return {
       module: AuthRestModule,
-      // HttpModule is always imported so the consumer's `useFactory` can
-      // `inject: [HttpService]` without re-importing it themselves. Any
-      // additional `imports` from the caller are appended verbatim.
-      // RestModule.forHttpService is imported so RestClient construction
-      // is delegated there — eliminating the duplicate `new RestClient(...)`
-      // call that would otherwise exist in both modules.
+      // Mirrors `RestModule.forRootAsync`: the module owns its own axios
+      // lifecycle by registering `HttpModule.registerAsync(...)` against
+      // `opts.axios ?? {}` so the upstream transport is built once with the
+      // consumer-supplied configuration. The resulting `HttpService` is
+      // consumed locally (see the `RestClient` provider below) so the
+      // canonical `new RestClient(httpService, resilience, hooks)` wiring
+      // lives in exactly one place.
+      //
+      // Note: `RestModule.forHttpService` is intentionally NOT used here
+      // even though it would centralise the `new RestClient(...)` call.
+      // Routing through that delegation ran into a NestJS DI shadowing
+      // issue: the static `@Module({})` decorator on `RestModule` provides
+      // an unconfigured default `HttpService` (`axios.create({})`) so the
+      // zero-config `imports: [RestModule]` path works, but that local
+      // provider shadows the configured `HttpService` from the imported
+      // `HttpModule.registerAsync(...)` — yielding a `RestClient` whose
+      // `axiosRef.defaults.baseURL` is `undefined` regardless of what the
+      // consumer's factory returned. Constructing `RestClient` directly in
+      // this module's own provider scope (where `HttpService` resolves
+      // unambiguously to the registered `HttpModule.registerAsync` export)
+      // avoids the shadowing without dragging the fix into the bare
+      // `forHttpService` API.
       imports: [
-        HttpModule,
-        ...userImports,
-        RestModule.forHttpService({
+        HttpModule.registerAsync({
           imports: userImports,
           inject,
-          // Derive httpService and resilience directly from the consumer's
-          // factory so RestModule does not need to know about
-          // AUTH_MODULE_OPTIONS. The field names in this module's options shape
-          // (`httpService`, `resilience`) match `RestFromHttpServiceOptions`
-          // exactly, so the consumer's factory output flows through unchanged.
           useFactory: async (...args: unknown[]) => {
             const opts = await options.useFactory(...args)
-            return { httpService: opts.httpService, resilience: opts.resilience }
+            return opts.axios ?? {}
           },
         }),
+        ...userImports,
       ],
       providers: [
         // 1. Resolve the consumer's async options first — kept available to
-        //    diagnostics/test fixtures via the AUTH_MODULE_OPTIONS token.
+        //    diagnostics/test fixtures via the AUTH_MODULE_OPTIONS token, and
+        //    consumed by the AuthRestClient provider to forward `opts.hooks`.
         {
           provide: AUTH_MODULE_OPTIONS,
           useFactory: options.useFactory,
           inject,
         },
-        // 2. Strategy class self-binding. NestJS DI accepts `useClass`
+        // 2. RestClient — built from the `HttpService` produced by the
+        //    `HttpModule.registerAsync(...)` registration above plus the
+        //    consumer's resilience/hooks (read out of AUTH_MODULE_OPTIONS).
+        //    `resolveResilience` reconciles axios-vs-resilience timeout
+        //    precedence (see helper docstring in rest.module.ts). Default
+        //    preset fallback applied here so explicit-undefined and omitted
+        //    both yield CONSERVATIVE.
+        //
+        //    DI-scope note: because this provider lives inside
+        //    `AuthRestModule`'s dynamic-module scope (NOT inside
+        //    `RestModule`), the local static-decorator default
+        //    `HttpService` from `RestModule` does NOT shadow the configured
+        //    one — `HttpService` resolves cleanly to the export of
+        //    `HttpModule.registerAsync(...)` listed in `imports` above.
+        {
+          provide: RestClient,
+          useFactory: (
+            httpService: HttpService,
+            opts: AuthRestModuleOptions,
+          ): RestClient => new RestClient(
+            httpService,
+            resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE,
+            opts.hooks,
+          ),
+          inject: [HttpService, AUTH_MODULE_OPTIONS],
+        },
+        // 3. Strategy class self-binding. NestJS DI accepts `useClass`
         //    self-registration for any class with parameter-decorator
         //    metadata (`@Injectable()` on classes with constructor deps;
         //    no decorator needed when the constructor is parameterless).
@@ -305,13 +353,12 @@ export class AuthRestModule {
           provide: options.authStrategy,
           useClass: options.authStrategy,
         },
-        // 3. AuthProcessor: receives the DI-resolved strategy instance plus
-        //    the resilient RestClient (provided by the imported RestModule)
-        //    so its auth handshake reuses the same resilience policy stack
-        //    as application calls. Inject token is `options.authStrategy`
-        //    (the user's class token) — NOT a hardcoded class — so swapping
-        //    strategies at the call site is enough to swap the processor's
-        //    upstream.
+        // 4. AuthProcessor: receives the DI-resolved strategy instance plus
+        //    the resilient RestClient (provided above) so its auth handshake
+        //    reuses the same resilience policy stack as application calls.
+        //    Inject token is `options.authStrategy` (the user's class token)
+        //    — NOT a hardcoded class — so swapping strategies at the call
+        //    site is enough to swap the processor's upstream.
         {
           provide: AuthProcessor,
           useFactory: (
@@ -320,23 +367,26 @@ export class AuthRestModule {
           ): AuthProcessor => new AuthProcessor(strategy, client),
           inject: [options.authStrategy, RestClient],
         },
-        // 4. AuthRestClient: top-level facade composed from the two
-        //    collaborators above.
+        // 5. AuthRestClient: top-level facade composed from the two
+        //    collaborators above. Reads `hooks` from AUTH_MODULE_OPTIONS so
+        //    the HookableHttpService lifecycle (`onInvoke` / `onReturn` /
+        //    `onError`) wraps the auth lifecycle (which itself wraps the
+        //    resilience pipeline owned by the inner RestClient) — same
+        //    third-positional-arg contract as `new RestClient(...)`.
         {
           provide: AuthRestClient,
           useFactory: (
             client: RestClient,
             processor: AuthProcessor,
-          ): AuthRestClient => new AuthRestClient(client, processor),
-          inject: [RestClient, AuthProcessor],
+            opts: AuthRestModuleOptions,
+          ): AuthRestClient => new AuthRestClient(client, processor, opts.hooks),
+          inject: [RestClient, AuthProcessor, AUTH_MODULE_OPTIONS],
         },
       ],
-      // `AuthRestClient` (the authenticated facade) is exported directly.
-      // `RestClient` (the underlying resilient transport) is re-exported by
-      // listing `RestModule` — the module that owns the RestClient provider.
-      // NestJS re-exports all exports of a listed module, so consumers can
-      // inject RestClient from either module without a second instance.
-      exports: [AuthRestClient, RestModule],
+      // Both `AuthRestClient` (the authenticated facade) and `RestClient`
+      // (the underlying resilient transport) are exported so consumers can
+      // inject either without spinning up a second instance.
+      exports: [AuthRestClient, RestClient],
     }
   }
 }

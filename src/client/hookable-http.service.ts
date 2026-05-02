@@ -14,7 +14,9 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
-import { firstValueFrom, isObservable } from 'rxjs'
+import { firstValueFrom, isObservable, type Observable } from 'rxjs'
+
+import type { RxjsPipeline } from './rxjs-pipeline'
 
 /**
  * Names of every HTTP verb the hookable transport surface dispatches through.
@@ -46,13 +48,13 @@ export type HttpVerb =
  * Structural surface required of the underlying transport. Both
  * `@nestjs/axios`'s `HttpService` (which returns `Observable<AxiosResponse>`)
  * and the {@link RestClient} class (which returns `Promise<AxiosResponse>`)
- * satisfy this shape, so {@link HookableHttpService} can wrap either without
+ * satisfy this shape, so {@link BaseHttpService} can wrap either without
  * importing one from the other.
  *
  * The verb returns are typed as `unknown` because the upstream transports use
- * incompatible reactive-vs-promise wrappers; {@link HookableHttpService}
+ * incompatible reactive-vs-promise wrappers; {@link BaseHttpService}
  * normalises the result via `firstValueFrom` when the value is an `Observable`.
- * Consumers of {@link HookableHttpService.callUnderlying} never see the raw
+ * Consumers of {@link BaseHttpService.callUnderlying} never see the raw
  * return value — it is funnelled through `firstValueFrom`/`await`, so a single
  * `unknown` return is sufficient (no narrowing burden propagates outward).
  *
@@ -93,13 +95,13 @@ export interface HttpServiceLike {
 
 /**
  * Carrier shape for the verb-invocation arguments threaded through
- * {@link HookableHttpService.dispatch}. `url` and `data` are optional because
+ * {@link BaseHttpService.dispatch}. `url` and `data` are optional because
  * not every verb owns those slots (`request` carries everything in `config`;
  * verbs in the `(url, config?)` family own `url` but not `data`).
  *
- * Subclasses that override {@link HookableHttpService.dispatch} treat this
+ * Subclasses that override {@link BaseHttpService.dispatch} treat this
  * carrier as immutable — produce a new object when any field needs to change
- * before forwarding to {@link HookableHttpService.callUnderlying}.
+ * before forwarding to {@link BaseHttpService.callUnderlying}.
  *
  * @example
  * ```ts
@@ -149,11 +151,11 @@ export interface InvokeArgs {
  * ```ts
  * import { Injectable } from '@nestjs/common'
  * import type { AxiosResponse } from 'axios'
- * import { HookableHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+ * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
  *
  * // Logging facade: records every verb invocation and the resulting status
  * @Injectable()
- * export class LoggingRestClient extends HookableHttpService {
+ * export class LoggingRestClient extends BaseHttpService {
  *   protected override async dispatch<T = unknown>(
  *     verb: HttpVerb,
  *     args: InvokeArgs,
@@ -172,7 +174,7 @@ export interface InvokeArgs {
  * }
  * ```
  */
-export abstract class HookableHttpService {
+export abstract class BaseHttpService {
   /**
    * Underlying transport this facade wraps. Stored as the structural
    * {@link HttpServiceLike} so the same dispatcher works for `HttpService`
@@ -180,8 +182,22 @@ export abstract class HookableHttpService {
    */
   protected readonly httpService: HttpServiceLike
 
-  constructor(httpService: HttpServiceLike) {
+  /**
+   * Optional RxJS pipeline applied to `Observable<AxiosResponse>` results from
+   * the underlying transport BEFORE they are normalised via `firstValueFrom`.
+   *
+   * The slot lets reactive resilience operators (deduplication, rate limiting,
+   * throttling) interpose on the source stream without leaking those concerns
+   * into {@link callUnderlying}. The pipeline is applied ONLY when the
+   * underlying transport returns an `Observable`; transports that return a
+   * `Promise` (e.g. {@link RestClient} when wrapped by {@link AuthRestClient})
+   * skip the pipeline entirely.
+   */
+  protected readonly rxjsPipeline?: RxjsPipeline
+
+  constructor(httpService: HttpServiceLike, rxjsPipeline?: RxjsPipeline) {
     this.httpService = httpService
+    this.rxjsPipeline = rxjsPipeline
   }
 
   /**
@@ -194,9 +210,9 @@ export abstract class HookableHttpService {
    * @example
    * ```ts
    * import type { AxiosResponse } from 'axios'
-   * import { HookableHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
    *
-   * class TimingClient extends HookableHttpService {
+   * class TimingClient extends BaseHttpService {
    *   protected override async dispatch<T = unknown>(
    *     verb: HttpVerb,
    *     args: InvokeArgs,
@@ -230,9 +246,9 @@ export abstract class HookableHttpService {
    * @example
    * ```ts
    * import type { AxiosResponse } from 'axios'
-   * import { HookableHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
+   * import { BaseHttpService, type HttpVerb, type InvokeArgs } from 'nestjs-http-client'
    *
-   * class RetryOnceClient extends HookableHttpService {
+   * class RetryOnceClient extends BaseHttpService {
    *   protected override async dispatch<T = unknown>(
    *     verb: HttpVerb,
    *     args: InvokeArgs,
@@ -254,7 +270,15 @@ export abstract class HookableHttpService {
   ): Promise<AxiosResponse<T>> {
     const result = invokeVerb(this.httpService, verb, args)
     if (isObservable(result)) {
-      return await firstValueFrom(result as never) as AxiosResponse<T>
+      // Apply the RxJS pipeline (deduplication / rate-limiting / throttling)
+      // ONLY on the reactive path — Promise-returning transports (e.g. the
+      // RestClient wrapped by AuthRestClient) keep their existing behaviour
+      // because the pipeline contract is defined over `Observable`.
+      const source = result as Observable<AxiosResponse<T>>
+      const piped = this.rxjsPipeline
+        ? (this.rxjsPipeline(verb, args, source as Observable<AxiosResponse>) as Observable<AxiosResponse<T>>)
+        : source
+      return await firstValueFrom(piped)
     }
     return await (result as Promise<AxiosResponse<T>>)
   }
@@ -426,6 +450,231 @@ export abstract class HookableHttpService {
    */
   patchForm<T = any, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<AxiosResponse<T, D>> {
     return this.dispatch<T>('patchForm', { url, data, config: (config ?? {}) as AxiosRequestConfig }) as Promise<AxiosResponse<T, D>>
+  }
+}
+
+/**
+ * Lifecycle hooks that wrap a single verb invocation on the
+ * {@link HookableHttpService} surface. Each hook is optional, and every hook
+ * uses an `undefined` (or `Promise<undefined>`) return value as the
+ * passthrough sentinel — the caller continues with the value it already had.
+ *
+ * Hooks are invoked INSIDE the resilience pipeline, so retries observe
+ * hook-transformed args (i.e. an `onInvoke` substitution applies to every
+ * attempt of the same logical request).
+ *
+ * - `onInvoke` runs before the underlying transport call. Returning a new
+ *   {@link InvokeArgs} replaces the carrier used for dispatch; returning
+ *   `undefined` (or `Promise<undefined>`) means "use the args unchanged".
+ *   Use this hook to mutate headers, rewrite URLs, or attach correlation IDs.
+ * - `onReturn` runs after a successful response. Returning a new
+ *   `AxiosResponse` replaces the response handed back to the caller;
+ *   returning `undefined` (or `Promise<undefined>`) means "use the response
+ *   unchanged". Use this hook to redact bodies, decorate metadata, or emit
+ *   instrumentation events.
+ * - `onError` runs when the transport (or any inner policy) throws.
+ *   Returning an `AxiosResponse` substitutes a synthetic success and
+ *   suppresses the error; returning `undefined`, `Promise<undefined>`, or
+ *   `void` rethrows the original error. Use this hook to surface fallback
+ *   responses or normalise error envelopes.
+ *
+ * @example
+ * ```ts
+ * import type { HooksConfig } from 'nestjs-http-client'
+ *
+ * const hooks: HooksConfig = {
+ *   // Attach a correlation ID to every outgoing request
+ *   onInvoke(_verb, args) {
+ *     return {
+ *       ...args,
+ *       config: {
+ *         ...args.config,
+ *         headers: { ...(args.config.headers ?? {}), 'X-Correlation-Id': crypto.randomUUID() },
+ *       },
+ *     }
+ *   },
+ *   // Redact a sensitive field before the response leaves the client
+ *   onReturn(_verb, _args, response) {
+ *     if (typeof response.data === 'object' && response.data !== null && 'secret' in response.data) {
+ *       return { ...response, data: { ...(response.data as object), secret: '[REDACTED]' } }
+ *     }
+ *     return undefined
+ *   },
+ *   // Suppress 404 errors by returning an empty payload
+ *   onError(_verb, _args, error) {
+ *     if (isAxiosError(error) && error.response?.status === 404) {
+ *       return { ...error.response, data: null }
+ *     }
+ *     return undefined
+ *   },
+ * }
+ * ```
+ */
+export interface HooksConfig {
+  /**
+   * Pre-call hook: transform `args` before the transport invocation.
+   *
+   * Return a new {@link InvokeArgs} carrier to replace the args used for
+   * dispatch, or return `undefined` (or `Promise<undefined>`) to use the
+   * incoming args unchanged (passthrough). Implementations MUST NOT mutate
+   * the input — return a new object instead.
+   */
+  onInvoke?: (
+    verb: HttpVerb,
+    args: InvokeArgs,
+  ) => InvokeArgs | Promise<InvokeArgs> | undefined | Promise<undefined>
+
+  /**
+   * Post-call hook: transform or observe the successful response.
+   *
+   * Return a new `AxiosResponse` to replace the response handed back to the
+   * caller, or return `undefined` (or `Promise<undefined>`) to use the
+   * response unchanged (passthrough). Implementations MUST NOT mutate the
+   * input — return a new object instead.
+   */
+  onReturn?: (
+    verb: HttpVerb,
+    args: InvokeArgs,
+    response: AxiosResponse,
+  ) => AxiosResponse | Promise<AxiosResponse> | undefined | Promise<undefined>
+
+  /**
+   * Error hook: substitute a synthetic response (suppressing the error) or
+   * rethrow the original error.
+   *
+   * Return an `AxiosResponse` to suppress the error and resolve with the
+   * substituted response, or return `undefined` / `Promise<undefined>` /
+   * `void` to rethrow the original error (passthrough).
+   */
+  onError?: (
+    verb: HttpVerb,
+    args: InvokeArgs,
+    error: unknown,
+  ) => AxiosResponse | Promise<AxiosResponse> | undefined | Promise<undefined> | void
+}
+
+/**
+ * Concrete {@link BaseHttpService} subclass that applies a {@link HooksConfig}
+ * lifecycle around every dispatched verb invocation. The dispatch override
+ * wraps `super.dispatch(...)` with three optional hooks:
+ *
+ * - `onInvoke` runs BEFORE `super.dispatch` and may transform the
+ *   {@link InvokeArgs} carrier (e.g. attach a correlation header).
+ * - `onReturn` runs AFTER a successful `super.dispatch` and may substitute
+ *   the resolved {@link AxiosResponse} (e.g. redact a sensitive field).
+ * - `onError` runs WHEN `super.dispatch` throws and may either suppress the
+ *   error by returning a synthetic response, or rethrow by returning
+ *   `undefined` / `void`.
+ *
+ * Each hook treats `undefined` (or `Promise<undefined>`) as the "passthrough"
+ * sentinel — the caller continues with the value it already had. Any other
+ * return (including `null` or any other falsy non-undefined value) is treated
+ * as a substitute. Hook return values are awaited so async transformations
+ * (token lookups, instrumentation flushes, …) integrate naturally.
+ *
+ * Hooks run INSIDE any subclass `dispatch` override that wraps
+ * `super.dispatch(...)`. Concretely, when {@link RestClient} (which extends
+ * `HookableHttpService`) wraps `super.dispatch` in `policy.execute(...)`,
+ * every retry attempt re-invokes the hook lifecycle — guaranteeing retries
+ * observe hook-transformed args rather than running once before the resilience
+ * pipeline.
+ *
+ * @example
+ * ```ts
+ * import { HookableHttpService } from 'nestjs-http-client'
+ *
+ * // Attach a correlation ID and log every successful response.
+ * const client = new HookableHttpService(httpService, {
+ *   onInvoke(_verb, args) {
+ *     return {
+ *       ...args,
+ *       config: {
+ *         ...args.config,
+ *         headers: { ...(args.config.headers ?? {}), 'X-Correlation-Id': crypto.randomUUID() },
+ *       },
+ *     }
+ *   },
+ *   onReturn(verb, _args, response) {
+ *     console.log(`${verb.toUpperCase()} -> ${response.status}`)
+ *     return undefined // passthrough — keep the original response
+ *   },
+ * })
+ * ```
+ */
+export class HookableHttpService extends BaseHttpService {
+  /**
+   * User-supplied hook configuration. Stored as `protected readonly` so
+   * subclasses (or test doubles) can introspect the configuration without
+   * dropping back to a wider cast, but the field is never re-assigned after
+   * construction.
+   */
+  protected readonly hooks: HooksConfig
+
+  constructor(
+    httpService: HttpServiceLike,
+    hooks?: HooksConfig,
+    rxjsPipeline?: RxjsPipeline,
+  ) {
+    // Forward the rxjsPipeline to BaseHttpService so the reactive pipeline
+    // (deduplication / rate limiting / throttling) is applied inside
+    // `callUnderlying`. Hooks live one layer above — they wrap the entire
+    // dispatch (including the pipeline-aware call into the transport).
+    super(httpService, rxjsPipeline)
+    // Default to an empty object so the dispatch override can read
+    // `this.hooks.onInvoke` without a separate undefined-guard on every call.
+    this.hooks = hooks ?? {}
+  }
+
+  /**
+   * Wraps `super.dispatch(...)` with the {@link HooksConfig} lifecycle:
+   *
+   * 1. `onInvoke(verb, args)` — awaited; the resolved value (when not
+   *    `undefined`) replaces `args` for the inner dispatch. `undefined` is the
+   *    passthrough sentinel; any other value (including `null` or a falsy
+   *    non-undefined) is treated as a substitute.
+   * 2. `super.dispatch(verb, args)` — the inner transport call.
+   * 3. `onReturn(verb, args, response)` — awaited; the resolved value (when
+   *    not `undefined`) replaces the response handed to the caller. Same
+   *    passthrough semantics as `onInvoke`.
+   * 4. If `super.dispatch` throws, `onError(verb, args, error)` is awaited;
+   *    if the resolved value is an `AxiosResponse`, the error is suppressed
+   *    and the substituted response is returned. `undefined` / `void`
+   *    rethrows the original error.
+   *
+   * Note that `onError` does NOT receive the (possibly hook-transformed) args
+   * directly — it sees the same `args` that were passed into the inner
+   * dispatch (i.e. the `onInvoke` substitute, when one was returned). This
+   * keeps `onError` aligned with what the transport actually saw, which is
+   * what fallback-construction logic typically needs (e.g. echoing the
+   * request URL into the synthetic response config).
+   */
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    args: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    // `?? args` implements the documented passthrough sentinel: only
+    // `undefined` (or `Promise<undefined>`) means "use args unchanged"; any
+    // other return value — including `null` — is treated as a substitute.
+    const nextArgs = (await this.hooks.onInvoke?.(verb, args)) ?? args
+
+    try {
+      const response = await super.dispatch<T>(verb, nextArgs)
+      // Same passthrough sentinel as onInvoke. Cast to `AxiosResponse<T>`
+      // because the hook signature carries the unparameterised `AxiosResponse`
+      // shape — the caller's `T` is preserved across the substitution.
+      const substituted = await this.hooks.onReturn?.(verb, nextArgs, response)
+      return (substituted ?? response) as AxiosResponse<T>
+    }
+    catch (error) {
+      const recovered = await this.hooks.onError?.(verb, nextArgs, error)
+      if (recovered === undefined) {
+        // Passthrough: rethrow the original error so resilience policies above
+        // (retry / circuit-breaker / fallback) and the caller's catch handler
+        // see the same failure the transport produced.
+        throw error
+      }
+      return recovered as AxiosResponse<T>
+    }
   }
 }
 

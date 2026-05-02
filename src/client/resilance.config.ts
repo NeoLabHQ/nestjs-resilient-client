@@ -11,6 +11,7 @@ import type {
     ISuccessEvent,
     TimeoutStrategy,
 } from "cockatiel";
+import type { HttpVerb, InvokeArgs } from "./hookable-http.service";
 
 /**
  * Configuration for the retry policy. Controls how many attempts are made,
@@ -30,7 +31,7 @@ import type {
  * }
  * ```
  */
-export interface RetryConfig<T, S = void> {
+export interface RetryConfig<T> {
     shouldRetry?: (error: Error) => boolean;
     maxAttempts: number;
     backoff:
@@ -203,6 +204,122 @@ export interface FallbackConfig<R = unknown> {
 }
 
 /**
+ * Configuration for the deduplication RxJS operator. When enabled, concurrent
+ * subscribers that resolve to the same key share a single in-flight source
+ * Observable subscription — i.e. ten concurrent identical `GET /users/42`
+ * calls hit the network exactly once and every caller receives the same
+ * response. The cache entry is removed after the source completes or errors,
+ * so sequential calls always trigger a fresh network request.
+ *
+ * Default key derivation is `${verb}:${args.url ?? args.config.url ?? ''}`.
+ * Provide `keyBuilder` to customise (e.g. include a query parameter or a
+ * tenant header in the cache key).
+ *
+ * @example
+ * ```ts
+ * import type { DeduplicationConfig } from 'nestjs-http-client'
+ *
+ * // Use default key derivation
+ * const defaultDedup: DeduplicationConfig = {}
+ *
+ * // Include a tenant header in the cache key so requests for different
+ * // tenants do not collide
+ * const tenantAwareDedup: DeduplicationConfig = {
+ *   keyBuilder: (verb, args) => {
+ *     const tenant = (args.config.headers as Record<string, string> | undefined)?.['X-Tenant'] ?? ''
+ *     return `${tenant}:${verb}:${args.url ?? args.config.url ?? ''}`
+ *   },
+ * }
+ * ```
+ */
+export interface DeduplicationConfig {
+    /**
+     * Derives the cache key for a verb invocation. When omitted, the default
+     * key is `${verb}:${args.url ?? args.config.url ?? ''}`. Two requests
+     * that resolve to the same key share a single in-flight subscription.
+     */
+    keyBuilder?: (verb: HttpVerb, args: InvokeArgs) => string;
+}
+
+/**
+ * Configuration for the rate-limiter RxJS operator. Bounds the long-run rate
+ * at which requests are emitted to the underlying transport, smoothing
+ * outbound traffic so the upstream service is not overwhelmed by bursts.
+ *
+ * Two strategies are supported:
+ *
+ * - `'token-bucket'` — maintains a counter of available tokens (initial =
+ *   `capacity`). Each emission consumes one token; tokens refill at
+ *   `refillRatePerSec` per second. Bursts up to `capacity` are allowed; once
+ *   the bucket is empty, subsequent emissions wait for the next refill.
+ * - `'leaky-bucket'` — emits at a fixed rate of `refillRatePerSec` per
+ *   second regardless of arrival burst. Smooths traffic to a constant rate.
+ *
+ * @example
+ * ```ts
+ * import type { RateLimiterConfig } from 'nestjs-http-client'
+ *
+ * // Allow short bursts of up to 10 requests, then sustain 5 requests/sec
+ * const tokenBucket: RateLimiterConfig = {
+ *   strategy: 'token-bucket',
+ *   capacity: 10,
+ *   refillRatePerSec: 5,
+ * }
+ *
+ * // Strict 2 requests/sec regardless of arrival pattern
+ * const leakyBucket: RateLimiterConfig = {
+ *   strategy: 'leaky-bucket',
+ *   capacity: 1,
+ *   refillRatePerSec: 2,
+ * }
+ * ```
+ */
+export interface RateLimiterConfig {
+    /**
+     * Algorithm used to schedule emissions. `'token-bucket'` allows bursts
+     * up to `capacity`; `'leaky-bucket'` enforces a strictly constant rate.
+     */
+    strategy: "token-bucket" | "leaky-bucket";
+    /**
+     * Maximum burst size for `'token-bucket'` (initial token count). For
+     * `'leaky-bucket'` this caps the in-flight queue depth before back-pressure.
+     */
+    capacity: number;
+    /**
+     * Sustained emission rate, in emissions per second. Tokens refill at this
+     * rate for `'token-bucket'`; `'leaky-bucket'` emits at exactly this rate.
+     */
+    refillRatePerSec: number;
+}
+
+/**
+ * Configuration for the throttling RxJS operator. Caps the number of
+ * emissions that may pass through within a fixed sliding window. Excess
+ * emissions wait until a slot in the next window becomes available.
+ *
+ * Throttling differs from rate-limiting in that it enforces a hard ceiling
+ * over a fixed-duration window (e.g. "no more than 100 requests per minute"),
+ * whereas rate-limiting smooths emission cadence over time.
+ *
+ * @example
+ * ```ts
+ * import type { ThrottlingConfig } from 'nestjs-http-client'
+ *
+ * // No more than 100 requests per minute
+ * const throttling: ThrottlingConfig = {
+ *   requestsPerInterval: 100,
+ *   intervalMs: 60_000,
+ * }
+ * ```
+ */
+export interface ThrottlingConfig {
+    /** Maximum number of emissions allowed within a single window. */
+    requestsPerInterval: number;
+    /** Length of the throttling window, in milliseconds. */
+    intervalMs: number;
+}
+
+/**
  * Composable resilience configuration. Each field is optional; an empty config
  * produces a `NoopPolicy`. Fields are composed in the order: retry → timeout →
  * circuitBreaker → bulkhead → fallback.
@@ -234,14 +351,14 @@ export interface FallbackConfig<R = unknown> {
  */
 export interface ResilanceConfig<T, S = void, R = unknown> {
     /** Retry request multiple times if it fails. */
-    retry?: RetryConfig<T, S>;
-    /** 
-     * Circuit breakers stop execution for a period of time after a failure threshold has been reached. 
-     * This is very useful to allow faulting systems to recover without overloading them. 
+    retry?: RetryConfig<T>;
+    /**
+     * Circuit breakers stop execution for a period of time after a failure threshold has been reached.
+     * This is very useful to allow faulting systems to recover without overloading them.
      * */
     circuitBreaker?: CircuitBreakerConfig;
-    /** 
-     * A Bulkhead is a simple structure that limits the number of concurrent calls. 
+    /**
+     * A Bulkhead is a simple structure that limits the number of concurrent calls.
      * Attempting to exceed the capacity will cause execute() to throw a BulkheadRejectedError.
      * */
     bulkhead?: BulkheadConfig;
@@ -258,4 +375,30 @@ export interface ResilanceConfig<T, S = void, R = unknown> {
      * independently — retries can recover from individual slow attempts.
      */
     timeout?: number | TimeoutConfig;
+    /**
+     * Shares one in-flight subscription across concurrent identical
+     * requests. When set, callers that resolve to the same cache key (default
+     * `${verb}:${url}`) hit the network exactly once and every caller
+     * receives the same response. Cache entries are evicted on completion or
+     * error of the source Observable, so sequential calls always trigger a
+     * fresh request. Implemented as the outermost RxJS operator so cached
+     * results bypass `rateLimiter` and `throttling` for subsequent callers.
+     */
+    deduplication?: DeduplicationConfig;
+    /**
+     * Smooths the outbound emission rate using either a token-bucket
+     * (burstable) or leaky-bucket (constant rate) strategy. Applied after
+     * {@link deduplication} and before {@link throttling} in the RxJS
+     * pipeline so deduplicated calls do not consume rate-limit slots and
+     * throttling sees the rate-limited stream.
+     */
+    rateLimiter?: RateLimiterConfig;
+    /**
+     * Caps the number of emissions allowed within a fixed sliding window
+     * (e.g. "no more than N per minute"). Applied as the innermost RxJS
+     * operator (after deduplication and rate-limiting), so throttling
+     * enforces a hard ceiling on requests that have already passed the
+     * earlier two stages.
+     */
+    throttling?: ThrottlingConfig;
 }

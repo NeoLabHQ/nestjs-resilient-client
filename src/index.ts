@@ -1,5 +1,5 @@
 // Runtime client classes
-export { HookableHttpService } from './client/hookable-http.service'
+export { BaseHttpService, HookableHttpService } from './client/hookable-http.service'
 export { RestClient } from './client/rest.client'
 export { RestModule, REST_MODULE_OPTIONS } from './client/rest.module'
 export { AuthRestClient } from './auth/auth-rest.client'
@@ -17,6 +17,7 @@ export type {
   HttpServiceLike,
   HttpVerb,
   InvokeArgs,
+  HooksConfig,
 } from './client/hookable-http.service'
 
 // Type-only exports — resilience configuration surface
@@ -27,6 +28,9 @@ export type {
   BulkheadConfig,
   FallbackConfig,
   TimeoutConfig,
+  DeduplicationConfig,
+  RateLimiterConfig,
+  ThrottlingConfig,
 } from './client/resilance.config'
 
 // Type-only exports — module options surface (for advanced consumers and test fixtures)
@@ -34,3 +38,4 @@ export type {
   RestModuleOptions,
   RestFromHttpServiceOptions,
 } from './client/rest.module'
+export type { AuthRestModuleOptions } from './auth/auth-rest.module'

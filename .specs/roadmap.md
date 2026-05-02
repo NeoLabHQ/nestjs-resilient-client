@@ -3,7 +3,7 @@
 ## Tasks
 
 - [x] improve-auth-rest-client.feature.md
-- [] improve-library-usability.feature.md
+- [x] improve-library-usability.feature.md
 
 ## In consideration
 

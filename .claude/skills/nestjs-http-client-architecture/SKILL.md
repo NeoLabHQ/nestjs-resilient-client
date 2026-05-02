@@ -1,10 +1,10 @@
 ---
 name: NestJS HTTP Client Architecture
-description: Architecture patterns, decorator design, and testing setup for the nestjs-http-client library — RestClient, AuthRestClient, AuthProcessor, @ExecuteWithPolicy, @DeduplicateInflight, and the jest/Stryker/testcontainers test stack.
-topics: nestjs, http-client, base-decorators, cockatiel, jest, stryker, testcontainers, resilience, authentication, decorators
+description: Architecture patterns, decorator design, and testing setup for the nestjs-http-client library — RestClient, AuthRestClient, AuthProcessor, BaseHttpService/HookableHttpService, HooksConfig, RxJS resilience operators, @DeduplicateInflight, and the jest/Stryker/testcontainers test stack.
+topics: nestjs, http-client, base-decorators, cockatiel, rxjs, jest, stryker, testcontainers, resilience, authentication, decorators, hooks
 created: 2026-04-26
-updated: 2026-04-30
-scratchpad: .specs/scratchpad/8f5da770.md
+updated: 2026-05-01
+scratchpad: .specs/scratchpad/31bb8547.md
 ---
 
 # NestJS HTTP Client Architecture
@@ -19,39 +19,43 @@ This skill documents the architecture of the `nestjs-http-client` library. The l
 
 ## Current Implemented State
 
-The codebase is **fully implemented** on branch `feature/vg/library-usability-improvements`. All tests pass. The architecture described below reflects the IMPLEMENTED state plus the pending auth refactor.
+The codebase is **fully implemented** on branch `feature/vg/library-usability-improvements`. All tests pass. The architecture described below reflects the IMPLEMENTED state plus the pending improve-library-usability changes.
 
-### Implemented Files (verified 2026-04-30)
+### Implemented Files (verified 2026-05-01)
 
-- `src/client/hookable-http.service.ts` — abstract base, `HttpVerb`, `InvokeArgs`, `HttpServiceLike`, verb surface
-- `src/client/rest.client.ts` — `RestClient extends HookableHttpService`, overrides `dispatch` with `policy.execute`
-- `src/client/rest.module.ts` — `RestModule.forRootAsync` and `RestModule.forHttpService`
+- `src/client/hookable-http.service.ts` — abstract base (PENDING RENAME to `BaseHttpService`), `HttpVerb`, `InvokeArgs`, `HttpServiceLike`, verb surface
+- `src/client/rest.client.ts` — `RestClient extends HookableHttpService` (PENDING: extend new `HookableHttpService` with hooks), overrides `dispatch` with `policy.execute`
+- `src/client/rest.module.ts` — `RestModule.forRootAsync`, `RestModule.forHttpService` (PENDING: add zero-config class-level Module + timeout conflict resolution)
 - `src/client/resailencePolicyBuilder.ts` — composes cockatiel policies from `ResilanceConfig`
-- `src/client/resilance.config.ts` — `ResilanceConfig`, `RetryConfig`, `CircuitBreakerConfig`, etc.
-- `src/auth/auth.config.ts` — `AuthStrategy` interface + `AuthConfig` interface (AuthConfig being REMOVED in next task)
-- `src/auth/auth-strategy.service.ts` — `AuthStrategyService` (being RENAMED to `AuthProcessor` in next task)
-- `src/auth/auth-rest.client.ts` — `AuthRestClient extends HookableHttpService`
-- `src/auth/auth-rest.module.ts` — `AuthRestModule.forRootAsync` dynamic module
+- `src/client/resilance.config.ts` — `ResilanceConfig`, `RetryConfig`, `CircuitBreakerConfig`, etc. (PENDING: add RxJS fields: `deduplication`, `rateLimit`, `timeLimiter`, `throttle`)
+- `src/auth/auth.config.ts` — `AuthStrategy` interface
+- `src/auth/auth-processor.ts` — `AuthProcessor` (renamed from `AuthStrategyService`)
+- `src/auth/auth-rest.client.ts` — `AuthRestClient extends HookableHttpService` (PENDING: extend new `HookableHttpService`)
+- `src/auth/auth-rest.module.ts` — `AuthRestModule.forRootAsync` (PENDING: extend `AuthRestModuleOptions` with axios + hooks)
 - `src/deduplicate-inflight.decorator.ts` — `@DeduplicateInflight` using `Wrap` from `base-decorators`
 - `src/index.ts` — public API exports
 - `tests/e2e-setup.ts` / `tests/e2e-teardown.ts` — testcontainers httpbin lifecycle
-- `tests/auth-rest-client.e2e.spec.ts`, `tests/rest-client.e2e.spec.ts`, `tests/smoke.e2e.spec.ts` — e2e suites
+- `tests/auth-rest-client.e2e.spec.ts`, `tests/rest-client.e2e.spec.ts`, `tests/smoke.e2e.spec.ts`, `tests/static-token.e2e.spec.ts` — e2e suites
 - `jest.config.ts`, `jest.e2e.config.ts`, `stryker.config.json` — test configuration files
 - `base-decorators@1.1.0`, `jest@29.7`, `ts-jest@29`, `@types/jest@29`, `jest-it-up`, `@stryker-mutator/*`, `testcontainers` — all installed in devDependencies
+- **RxJS 7.8.2** — already installed as transitive dependency of `@nestjs/axios`; all needed operators available
 
 ---
 
 ## Key Concepts
 
-- **RestClient**: Thin wrapper around `HttpService` that runs requests through a cockatiel `IPolicy`. `policy` field is public readonly. Extends `HookableHttpService`, overrides `dispatch` to wrap with `policy.execute(policyCtx => ...)` and merges `policyCtx.signal` into the axios config.
-- **HookableHttpService**: Abstract base class. Provides the full verb surface (`request`, `get`, `post`, etc.) via a protected `dispatch` template method and `callUnderlying` helper. Subclasses layer cross-cutting concerns by overriding `dispatch`.
-- **AuthRestClient**: Extends `HookableHttpService`. Holds `restClient: RestClient` (as httpService) and `authStrategy: AuthStrategyService` (or `AuthProcessor` after rename). Overrides `dispatch` to run pre-flight auth, extend request config, and recover from a single 401.
-- **AuthStrategyService** (being renamed to **AuthProcessor**): Manages authentication lifecycle. Calls `authConfig.authenticate(client)` to obtain an `AuthStrategy` result object (currently) OR will call `authStrategy.authenticate(client)` directly (after refactor). Uses `@DeduplicateInflight` on `performAuthenticate()` for single-flight guarantee.
-- **AuthConfig** (being REMOVED): Interface wrapping a single `authenticate(client) => Promise<AuthStrategy>` factory. Will be removed — its responsibility moves into the `AuthStrategy` class itself.
-- **AuthStrategy** (interface, being EXPANDED): Currently `{ isAuthenticated(): boolean; extendRequest(config): AxiosRequestConfig }`. After refactor gains `authenticate(client: RestClient): Promise<void>` — making it a full class-based strategy.
-- **AuthRestModule**: Dynamic NestJS module. Currently accepts `{ httpService, authConfig: AuthConfig, resilience? }`. After refactor accepts `{ httpService, authStrategy: Type<AuthStrategy>, resilience? }`.
+- **BaseHttpService** (PENDING RENAME from `HookableHttpService`): Abstract base class. Provides the full verb surface (`request`, `get`, `post`, etc.) via a protected `dispatch` template method and `callUnderlying` helper. Subclasses layer cross-cutting concerns by overriding `dispatch`. Normalises Observable/Promise results in `callUnderlying`.
+- **HookableHttpService** (PENDING: new class extending `BaseHttpService`): Adds `HooksConfig` parameter to constructor. Overrides `dispatch` to apply `onInvoke` (pre-call arg transform), `onReturn` (post-call response transform), and `onError` (error observation) hooks.
+- **HooksConfig**: Interface with three optional hooks: `onInvoke(verb, args) => InvokeArgs | Promise<InvokeArgs>`, `onReturn(verb, args, response) => AxiosResponse | Promise<AxiosResponse>`, `onError(verb, args, error) => void | never`.
+- **RestClient**: Thin wrapper around `HttpService` that runs requests through a cockatiel `IPolicy`. `policy` field is public readonly. Extends `HookableHttpService` (new), overrides `dispatch` to wrap with `policy.execute(policyCtx => ...)` and merges `policyCtx.signal` into the axios config.
+- **AuthRestClient**: Extends `HookableHttpService` (new). Holds `restClient: RestClient` (as httpService) and `authProcessor: AuthProcessor`. Overrides `dispatch` to run pre-flight auth, extend request config, and recover from a single 401.
+- **AuthProcessor**: Manages authentication lifecycle. Calls `authStrategy.authenticate(client)` directly (no `authResult` caching). Uses `@DeduplicateInflight` on `performAuthenticate()` for single-flight guarantee.
+- **AuthStrategy** (interface): Full class-based strategy with `authenticate(client: RestClient): Promise<void>`, `isAuthenticated(): boolean`, `extendRequest(config): AxiosRequestConfig`, `invalidate(): void`.
+- **AuthRestModule**: Dynamic NestJS module. Accepts `{ httpService, resilience?, axios?, hooks? }` (PENDING: gains `axios` and `hooks` fields via `AuthRestModuleOptions extends RestModuleOptions`).
 - **@DeduplicateInflight**: Method decorator using `Wrap` from `base-decorators`. Coalesces concurrent calls with the same key into a single promise. The decorated class must expose `inflightMap: Map<string, Promise<unknown>>`.
-- **RestModule**: Dynamic NestJS module. `forRootAsync` creates an internal `HttpModule` from axios config. `forHttpService` accepts a pre-resolved `HttpService` (used by `AuthRestModule` to avoid a second axios instance).
+- **RestModule**: Dynamic NestJS module. `forRootAsync` creates an internal `HttpModule` from axios config. `forHttpService` accepts a pre-resolved `HttpService` (used by `AuthRestModule`). PENDING: add zero-config class-level module support (`imports: [RestModule]` without `forRootAsync`).
+- **RxJS resilience operators** (PENDING): New optional fields in `ResilanceConfig` — `deduplication`, `rateLimit`, `timeLimiter`, `throttle` — implemented as RxJS operators applied to the Observable in `callUnderlying`.
+- **Timeout conflict resolution** (PENDING): If `axios.timeout` is set in module options, `resilience.timeout` must be stripped before constructing `RestClient` to avoid competing timeouts.
 
 ---
 
@@ -223,7 +227,203 @@ function DeduplicateInflight<TArgs extends unknown[]>(keyBuilder: KeyBuilder<TAr
 
 **Critical**: The decorated class MUST have `readonly inflightMap = new Map<string, Promise<unknown>>()` as a public property. The key builder for auth should return a constant string so all concurrent auth calls share one promise.
 
-### Pattern 5: Static auth via RestClient (no AuthRestModule needed)
+### Pattern 5: BaseHttpService → HookableHttpService rename + new HookableHttpService with hooks
+
+**Context**: The `improve-library-usability` task renames `HookableHttpService` to `BaseHttpService` and introduces a new `HookableHttpService` that extends `BaseHttpService` with lifecycle hook support.
+
+**File changes**:
+- `src/client/hookable-http.service.ts`: rename class `HookableHttpService` → `BaseHttpService`; add new `HookableHttpService extends BaseHttpService` in same file (or separate file)
+- `src/client/rest.client.ts`: `RestClient extends HookableHttpService` (unchanged — still hooks-aware via new class)
+- `src/auth/auth-rest.client.ts`: `AuthRestClient extends HookableHttpService` (unchanged)
+- `src/index.ts`: export both `BaseHttpService` and `HookableHttpService`
+
+**HooksConfig interface**:
+
+```typescript
+export interface HooksConfig {
+  // Transform verb invocation args before callUnderlying executes.
+  // Must return a new InvokeArgs (treat input as immutable).
+  onInvoke?: (verb: HttpVerb, args: InvokeArgs) => InvokeArgs | Promise<InvokeArgs>
+  // Observe or substitute the response after callUnderlying returns.
+  // Must return a new AxiosResponse (treat input as immutable).
+  onReturn?: (verb: HttpVerb, args: InvokeArgs, response: AxiosResponse) => AxiosResponse | Promise<AxiosResponse>
+  // Receive the error if callUnderlying throws. Can rethrow (to propagate)
+  // or remain silent to let the caller handle it.
+  onError?: (verb: HttpVerb, args: InvokeArgs, error: unknown) => void | never
+}
+```
+
+**New HookableHttpService dispatch override**:
+
+```typescript
+export class HookableHttpService extends BaseHttpService {
+  constructor(httpService: HttpServiceLike, private readonly hooks?: HooksConfig) {
+    super(httpService)
+  }
+
+  protected override async dispatch<T = unknown>(
+    verb: HttpVerb,
+    args: InvokeArgs,
+  ): Promise<AxiosResponse<T>> {
+    const resolvedArgs = this.hooks?.onInvoke
+      ? await this.hooks.onInvoke(verb, args)
+      : args
+    try {
+      const response = await super.dispatch<T>(verb, resolvedArgs)
+      return this.hooks?.onReturn
+        ? await this.hooks.onReturn(verb, resolvedArgs, response)
+        : response
+    } catch (error) {
+      this.hooks?.onError?.(verb, resolvedArgs, error)
+      throw error
+    }
+  }
+}
+```
+
+**CRITICAL**: `RestClient` and `AuthRestClient` must pass `hooks` through to `super(httpService, hooks)`. The `RestModule` and `AuthRestModule` must accept `hooks?: HooksConfig` in options and pass it through to the client constructor.
+
+### Pattern 6: RxJS Resilience Operators in ResilanceConfig
+
+**Context**: Four new RxJS-based operators are added to `ResilanceConfig` and applied to the HttpService Observable BEFORE `firstValueFrom` in `callUnderlying`.
+
+**Key insight**: `@nestjs/axios` `HttpService` returns `Observable<AxiosResponse>`. The existing `callUnderlying` uses `firstValueFrom(observable)`. Insert RxJS operator pipeline between the observable and `firstValueFrom`.
+
+**RxJS 7.8.2** is already installed as a transitive dependency of `@nestjs/axios`. No additional packages needed.
+
+**New ResilanceConfig fields**:
+
+```typescript
+export interface ResilanceConfig<T, S = void, R = unknown> {
+  // ... existing fields ...
+  /** Deduplicate concurrent requests to the same endpoint (same verb+url key). */
+  deduplication?: DeduplicationConfig
+  /** Rate limiting with token-bucket or leaky-bucket algorithm. */
+  rateLimit?: RateLimitConfig
+  /** Per-request timeout with RxJS timeout operator (cooperative cancellation). */
+  timeLimiter?: TimeLimiterConfig
+  /** Throttle emissions — allow one request per `duration` ms window. */
+  throttle?: ThrottleConfig
+}
+```
+
+**Operator implementations**:
+
+```typescript
+// Deduplication: shareReplay per URL key
+// Map<key, Observable> where key = `${verb}:${url ?? config.url}`
+// Each key maps to an Observable<AxiosResponse> wrapped in shareReplay({ bufferSize: 1, refCount: true })
+// so concurrent callers for the same key share one network call
+
+// Rate Limiter: concatMap + delay for leaky bucket (queue all, emit at fixed rate)
+// Token bucket: BehaviorSubject for token count, zip with source
+import { throttleTime, timeout as rxjsTimeout, concatMap, of, delay, shareReplay } from 'rxjs'
+
+// Throttle: throttleTime(duration) — emit first, ignore rest for duration ms
+observable.pipe(throttleTime(config.throttle.duration))
+
+// Time Limiter: RxJS timeout operator
+import { timeout as rxjsTimeout } from 'rxjs'
+observable.pipe(rxjsTimeout({ each: config.timeLimiter.duration }))
+// TimeoutError is thrown when duration elapses
+```
+
+**Implementation location**: `BaseHttpService.callUnderlying` applies the RxJS pipeline when `rxjsConfig` is provided. OR: a new `rxjsPipelineBuilder` function (parallel to `resiliencePolicyBuilder`) composes RxJS operators from config.
+
+**CRITICAL**: The RxJS pipeline operators are applied to the `Observable` returned by `invokeVerb(httpService, verb, args)` BEFORE the branch that checks `isObservable(result)`. For non-Observable (Promise) returns, the RxJS pipeline does NOT apply — this is fine because `RestClient` wraps `HttpService` (Observable-based), and the RxJS pipeline is relevant there.
+
+**Deduplication key derivation**: `${verb}:${url ?? config.url ?? ''}` — combines HTTP method and URL into a string key. The `InvokeArgs` carrier has `url` (for most verbs) or `config.url` (for `request` verb).
+
+### Pattern 7: Axios Timeout vs Policy Timeout Conflict Resolution
+
+**Problem**: If both `axios.timeout` (in `HttpModuleOptions`) and `resilience.timeout` (cockatiel `TimeoutPolicy`) are set, they compete. The axios timeout fires at the HTTP layer; the cockatiel timeout fires at the policy layer. The axios timeout can cancel a request before the policy timeout, making the policy timeout redundant and potentially causing confusing behavior.
+
+**Solution**: In both `RestModule.forRootAsync` and `AuthRestModule.forRootAsync`, when constructing `RestClient`, strip `timeout` from the resilience config if `opts.axios?.timeout` is set.
+
+```typescript
+function resolveResilience(opts: RestModuleOptions): ResilanceConfig<unknown> | undefined {
+  if (opts.axios?.timeout && opts.resilience?.timeout !== undefined) {
+    const { timeout: _dropped, ...rest } = opts.resilience ?? {}
+    return rest
+  }
+  return opts.resilience
+}
+// Usage in RestClient provider factory:
+new RestClient(httpService, resolveResilience(opts))
+```
+
+**README guidance**: Document both timeout mechanisms, when to use each, and the auto-stripping behavior. Example:
+
+```typescript
+// axios.timeout overrides policy timeout — no policy timeout will be set
+RestModule.forRootAsync({
+  useFactory: () => ({
+    axios: { baseURL: 'https://api.example.com', timeout: 5_000 },
+    resilience: ResilencePresets.CONSERVATIVE, // timeout:60s stripped automatically
+  }),
+})
+```
+
+### Pattern 8: Zero-Config RestModule (class-level module import)
+
+**Context**: Users should be able to import `RestModule` directly (without `forRootAsync`) for zero-configuration use.
+
+**NestJS pattern**: The `@Module({})` decorator on the `RestModule` class itself serves as the default no-config registration. When `imports: [RestModule]` is used (without calling `forRootAsync`), NestJS uses the class-level module metadata.
+
+**Implementation**: Update `RestModule` class-level `@Module` decorator:
+
+```typescript
+@Module({
+  imports: [HttpModule],
+  providers: [
+    {
+      provide: RestClient,
+      useFactory: (http: HttpService) => new RestClient(http),
+      inject: [HttpService],
+    },
+  ],
+  exports: [RestClient],
+})
+export class RestModule { ... }
+```
+
+**Constraint**: `HttpModule` imported at class level uses axios defaults (no `baseURL`). This is intentional for zero-config usage — the consumer sets `baseURL` per-request or via a different mechanism.
+
+**E2e test required**: Verify `imports: [RestModule]` works and `RestClient` is injectable. Test must make a real HTTP call to prove the client works without any configuration.
+
+### Pattern 9: AuthRestModuleOptions extending RestModuleOptions
+
+**Context**: `AuthRestModuleOptions` must extend `RestModuleOptions` to support `axios`, `hooks`, and `resilience` fields in addition to the required `httpService`.
+
+**New interface**:
+
+```typescript
+// RestModuleOptions (unchanged):
+interface RestModuleOptions {
+  axios?: HttpModuleOptions
+  resilience?: ResilanceConfig<unknown>
+  hooks?: HooksConfig
+}
+
+// AuthRestModuleOptions extends RestModuleOptions:
+interface AuthRestModuleOptions extends RestModuleOptions {
+  httpService: HttpService
+}
+```
+
+**CRITICAL**: When `axios` is provided to `AuthRestModuleOptions`, `AuthRestModule.forRootAsync` must configure the internal `HttpModule` with it. Currently `AuthRestModule` imports `HttpModule` (no config). After the change, it must import `HttpModule.registerAsync(...)` if `opts.axios` is non-empty.
+
+**Impact on AuthRestModule.forRootAsync**: The `RestModule.forHttpService` call must forward `opts.axios` to configure the RestClient's HttpService. Currently `RestModule.forHttpService` only accepts `{ httpService, resilience? }` — it does NOT create a new HttpModule (the httpService is pre-resolved). If axios config needs to apply, the httpService must already carry it. The factory chain:
+
+```
+AuthRestModule.forRootAsync useFactory → returns AuthRestModuleOptions
+  → HttpModule.registerAsync(opts.axios) → creates HttpService with axios config
+  → RestModule.forHttpService(httpService from above, opts.resilience) → creates RestClient
+```
+
+This means `AuthRestModule` must also conditionally use `HttpModule.registerAsync` with `opts.axios` when it's provided.
+
+### Pattern 10: Static auth via RestClient (no AuthRestModule needed)
 
 **When to use**: Static API tokens where credentials never change. No authentication lifecycle needed.
 
@@ -298,12 +498,18 @@ E2e specs in `tests/` receive `process.env.TEST_HTTP_BASE_URL` from `tests/e2e-s
 | **`emitDecoratorMetadata: true` inflates branch coverage** | Medium | Keep `emitDecoratorMetadata: false` in jest tsconfig inline override |
 | **DeduplicateInflight requires `inflightMap` property** | Critical | Declare `readonly inflightMap = new Map<string, Promise<unknown>>()` on decorated class |
 | **`callUnderlying` vs `super.dispatch` on 401 retry** | High | Use `callUnderlying` on 401 retry to skip pre-flight auth; use `super.dispatch` for normal calls that should go through the full pipeline |
-| **AuthRestClient `authStrategy` field must be public** | High | Module wiring, tests, and adapters read `client.authStrategy` directly |
+| **AuthRestClient `authProcessor` field must be public** | High | Module wiring, tests, and adapters read `client.authProcessor` directly |
 | **Single-source-of-truth RestClient** | High | `AuthRestClient.restClient` must return the same `RestClient` instance that `AuthRestModule` provides — never create a second instance |
 | **`@DeduplicateInflight` key must be constant for auth** | High | Use `() => 'authenticate'` so all concurrent auth calls share one promise |
 | **AuthRestClient dispatch: original config for 401 retry** | High | Re-extend from `initialArgs.config` (not from the already-extended `authedArgs.config`) so stale headers are fully replaced |
 | **Wrap `method` is already bound** | Low | Do NOT call `method.bind(this)` — base-decorators auto-binds per invocation |
-| **clearAuth() in post-refactor AuthProcessor** | Medium | AuthStrategy class must manage its own session state; AuthProcessor.clearAuth() must trigger re-auth without an `authResult` field to null |
+| **RxJS operators only apply to Observable returns** | Medium | `callUnderlying` only applies RxJS pipeline when `isObservable(result)` — Promise returns (e.g. RestClient wrapping RestClient) bypass it |
+| **Timeout conflict: axios.timeout + resilience.timeout** | High | Strip `resilience.timeout` when `opts.axios?.timeout` is set in RestModule/AuthRestModule factory — two competing timeouts cause confusing behavior |
+| **Zero-config RestModule needs HttpModule imported** | High | Class-level `@Module({ imports: [HttpModule], ... })` on RestModule enables `imports: [RestModule]` without forRootAsync |
+| **HookableHttpService rename breaks existing consumers** | High | Export both `BaseHttpService` (new name for old class) AND `HookableHttpService` (new class with hooks) from `src/index.ts` |
+| **HooksConfig onError must rethrow to propagate errors** | Medium | `onError` hook is observer-only by contract; if it returns without throwing, the original error is still rethrown by the dispatch override |
+| **AuthRestModuleOptions.axios needs HttpModule.registerAsync** | High | When `opts.axios` is set in AuthRestModuleOptions, AuthRestModule must use `HttpModule.registerAsync(opts.axios)` — the plain `HttpModule` import uses no config |
+| **RxJS deduplication shareReplay refCount** | Medium | Use `shareReplay({ bufferSize: 1, refCount: true })` — `refCount: true` ensures the observable is garbage-collected when all subscribers unsubscribe |
 
 ---
 
@@ -348,21 +554,27 @@ tests/
   e2e-teardown.ts         # globalTeardown: stops container
 ```
 
-### Pending Refactor: improve-auth-rest-client
+### Pending Refactor: improve-library-usability
 
-The following changes are required by task `improve-auth-rest-client`:
+The following changes are required by task `improve-library-usability`:
 
 | Change | Details |
 |--------|---------|
-| Remove `AuthConfig` interface | Delete from `auth.config.ts`; update `auth-rest.module.ts` and tests |
-| Rename `AuthStrategyService` → `AuthProcessor` | Rename file, class, all imports |
-| Expand `AuthStrategy` interface | Add `authenticate(client: RestClient): Promise<void>` method |
-| Update `AuthProcessor` | Remove `authResult` caching; call `AuthStrategy` methods directly |
-| Update `AuthRestModuleOptions` | Replace `authConfig: AuthConfig` with `authStrategy: Type<AuthStrategy>` |
-| Update `src/index.ts` | Export `AuthProcessor` instead of `AuthStrategyService`; remove `AuthConfig` type export |
-| Add static auth e2e test | Test `RestClient` with static `Authorization` header via axios config |
-| Update README | New API docs + static auth example + note about dynamic vs static auth |
-| Add JSDoc | Usage examples on all classes and methods |
+| Rename `HookableHttpService` → `BaseHttpService` | Rename class in `hookable-http.service.ts`; update all imports; keep file name or rename to `base-http.service.ts` |
+| Create new `HookableHttpService extends BaseHttpService` | New class with `HooksConfig` constructor param; overrides `dispatch` to apply hooks; in same file or new file |
+| Add `HooksConfig` interface | `{ onInvoke?, onReturn?, onError? }` — all optional |
+| Update `RestClient extends HookableHttpService` | Add `hooks?: HooksConfig` param, pass to `super(httpService, hooks)` |
+| Update `AuthRestClient extends HookableHttpService` | Add `hooks?: HooksConfig` param, pass to `super(httpService, hooks)` |
+| Update `RestModuleOptions` | Add `hooks?: HooksConfig` field |
+| Update `AuthRestModuleOptions extends RestModuleOptions` | Gain `axios?`, `hooks?`, `resilience?` from parent; keep required `httpService` |
+| Add RxJS resilience fields to `ResilanceConfig` | Add `deduplication?`, `rateLimit?`, `timeLimiter?`, `throttle?` with their config interfaces |
+| Apply RxJS pipeline in `callUnderlying` | After `invokeVerb(...)`, if Observable, apply composed RxJS operators before `firstValueFrom` |
+| Axios timeout conflict resolution | Helper `resolveResilience(opts)` strips `resilience.timeout` when `opts.axios?.timeout` is set |
+| Zero-config RestModule | Add class-level `@Module({ imports: [HttpModule], providers: [RestClient...], exports: [RestClient] })` |
+| Update `AuthRestModule.forRootAsync` | Use `HttpModule.registerAsync(opts.axios ?? {})` when `opts.axios` is provided |
+| Update `src/index.ts` | Export `BaseHttpService` and updated `HookableHttpService`; export new config interfaces |
+| Add e2e test for zero-config | Verify `imports: [RestModule]` compiles and `RestClient` is injectable with real HTTP call |
+| Update README | New `Quick Start` section; timeout example; hooks example; RxJS operators docs |
 
 ---
 
@@ -370,22 +582,28 @@ The following changes are required by task `improve-auth-rest-client`:
 
 | Source | Type | Last Verified |
 |--------|------|---------------|
-| src/client/hookable-http.service.ts | Internal (verified) | 2026-04-30 |
-| src/client/rest.client.ts | Internal (verified) | 2026-04-30 |
-| src/auth/auth.config.ts | Internal (verified) | 2026-04-30 |
-| src/auth/auth-strategy.service.ts | Internal (verified) | 2026-04-30 |
-| src/auth/auth-rest.client.ts | Internal (verified) | 2026-04-30 |
-| src/auth/auth-rest.module.ts | Internal (verified) | 2026-04-30 |
-| src/deduplicate-inflight.decorator.ts | Internal (verified) | 2026-04-30 |
-| src/index.ts | Internal (verified) | 2026-04-30 |
-| tests/auth-rest-client.e2e.spec.ts | Internal (verified) | 2026-04-30 |
-| tests/rest-client.e2e.spec.ts | Internal (verified) | 2026-04-30 |
-| package.json (all deps verified present) | Internal | 2026-04-30 |
+| src/client/hookable-http.service.ts | Internal (verified) | 2026-05-01 |
+| src/client/rest.client.ts | Internal (verified) | 2026-05-01 |
+| src/client/rest.module.ts | Internal (verified) | 2026-05-01 |
+| src/client/resilance.config.ts | Internal (verified) | 2026-05-01 |
+| src/client/resailencePolicyBuilder.ts | Internal (verified) | 2026-05-01 |
+| src/auth/auth.config.ts | Internal (verified) | 2026-05-01 |
+| src/auth/auth-processor.ts | Internal (verified) | 2026-05-01 |
+| src/auth/auth-rest.client.ts | Internal (verified) | 2026-05-01 |
+| src/auth/auth-rest.module.ts | Internal (verified) | 2026-05-01 |
+| src/deduplicate-inflight.decorator.ts | Internal (verified) | 2026-05-01 |
+| src/index.ts | Internal (verified) | 2026-05-01 |
+| src/resilence.policy.ts | Internal (verified) | 2026-05-01 |
+| tests/rest-client.e2e.spec.ts | Internal (verified) | 2026-05-01 |
+| node_modules/rxjs/package.json (v7.8.2) | Internal (runtime verified) | 2026-05-01 |
+| package.json (all deps verified present) | Internal | 2026-05-01 |
 | https://github.com/NeoLabHQ/base-decorators | Official | 2026-04-26 |
 | https://github.com/connor4312/cockatiel | Official | 2026-04-26 |
 | https://jestjs.io/docs/configuration | Official | 2026-04-26 |
 | https://node.testcontainers.org | Official | 2026-04-26 |
-| .specs/tasks/draft/improve-auth-rest-client.feature.md | Task file | 2026-04-30 |
+| https://rxjs.dev/api/operators/throttleTime | Official (RxJS 7) | 2026-05-01 |
+| https://rxjs.dev/api/operators/shareReplay | Official (RxJS 7) | 2026-05-01 |
+| .specs/tasks/draft/improve-library-usability.feature.md | Task file | 2026-05-01 |
 
 ---
 
@@ -395,4 +613,5 @@ The following changes are required by task `improve-auth-rest-client`:
 |------|---------|
 | 2026-04-26 | Initial creation for task: complete-initial-feature-set |
 | 2026-04-26 | Major update: corrected installed vs missing packages, fixed broken import pitfalls, verified from source inspection |
-| 2026-04-30 | Major update for task: improve-auth-rest-client — rewrote "Current State vs Target State" to reflect fully implemented codebase; replaced all outdated patterns with actual implemented dispatch override pattern; removed stale @ExecuteWithPolicy/@Authenticate decorator patterns (not implemented that way); updated library table to reflect all packages now installed; added class-based AuthStrategy DI pattern (pending refactor); added pending refactor change table; added static auth via RestClient pattern; updated sources to reflect direct file inspection |
+| 2026-04-30 | Major update for task: improve-auth-rest-client — rewrote "Current State vs Target State" to reflect fully implemented codebase; replaced all outdated patterns with actual implemented dispatch override pattern; removed stale @ExecuteWithPolicy/@Authenticate decorator patterns; updated library table to reflect all packages now installed; added class-based AuthStrategy DI pattern; added pending refactor change table; added static auth via RestClient pattern; updated sources to reflect direct file inspection |
+| 2026-05-01 | Major update for task: improve-library-usability — verified RxJS 7.8.2 installed; added BaseHttpService/HookableHttpService rename pattern (Pattern 5); added HooksConfig design with onInvoke/onReturn/onError (Pattern 5); added RxJS operator patterns for deduplication/rate limiting/time limiting/throttling (Pattern 6); added axios timeout conflict resolution (Pattern 7); added zero-config RestModule class-level module pattern (Pattern 8); added AuthRestModuleOptions extending RestModuleOptions (Pattern 9); updated Key Concepts, Pitfalls, Pending Refactor, Sources sections throughout |

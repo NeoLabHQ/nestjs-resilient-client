@@ -1,6 +1,6 @@
 import { isAxiosError, type AxiosResponse } from 'axios'
 
-import { HookableHttpService, type HttpVerb, type InvokeArgs } from '../client/hookable-http.service'
+import { HookableHttpService, type HooksConfig, type HttpVerb, type InvokeArgs } from '../client/hookable-http.service'
 import { RestClient } from '../client/rest.client'
 import type { AuthProcessor } from './auth-processor'
 
@@ -19,8 +19,11 @@ import type { AuthProcessor } from './auth-processor'
  *    {@link AuthProcessor.extendRequest} into a fresh
  *    {@link InvokeArgs} carrier.
  * 3. The augmented carrier is forwarded to {@link HookableHttpService.dispatch}
- *    on the underlying {@link RestClient} verb, which itself runs through the
- *    resilience pipeline.
+ *    (i.e. `super.dispatch`), which applies the user-supplied
+ *    {@link HooksConfig} lifecycle around the underlying
+ *    {@link RestClient} verb call. The {@link RestClient} itself runs through
+ *    the resilience pipeline, so hooks defined on the auth layer wrap the
+ *    auth lifecycle, which in turn wraps the resilience pipeline.
  * 4. On a single HTTP 401 axios error,
  *    {@link AuthProcessor.clearAuth} is called, the strategy is
  *    re-authenticated, and the *original* (pre-extension) config is
@@ -29,11 +32,14 @@ import type { AuthProcessor } from './auth-processor'
  *    failed attempt rather than being merged on top of it.
  *
  * **NFR — zero `rxjs` and zero `p-retry` imports anywhere in `src/auth/`.**
- * `rxjs` is consumed inside {@link HookableHttpService} only when the
+ * `rxjs` is consumed inside {@link HookableHttpService}'s base only when the
  * underlying transport returns an `Observable`; {@link RestClient} returns a
  * `Promise`, so this client never observes the reactive path. `p-retry` is
  * not used anywhere in the auth layer — the resilience pipeline owns retry
- * semantics.
+ * semantics. The same reasoning applies to the `rxjsPipeline` slot:
+ * {@link AuthRestClient} never forwards one to `super(...)` because the
+ * upstream {@link RestClient} transport already returns a `Promise`, so the
+ * pipeline would silently no-op on the auth layer.
  *
  * @example
  * ```ts
@@ -76,6 +82,12 @@ export class AuthRestClient extends HookableHttpService {
    *
    * @param restClient - Resilient HTTP client owning the cockatiel policy stack.
    * @param authProcessor - Processor coordinating the per-request auth lifecycle.
+   * @param hooks - Optional {@link HooksConfig} forwarded to
+   *   {@link HookableHttpService}. Hooks wrap the entire auth lifecycle (and
+   *   therefore the resilience pipeline owned by {@link RestClient}). No
+   *   `rxjsPipeline` is forwarded to `super(...)` because the underlying
+   *   transport here is a {@link RestClient} (returns `Promise`), so the
+   *   reactive pipeline would silently no-op at this layer.
    *
    * @example
    * ```ts
@@ -84,12 +96,24 @@ export class AuthRestClient extends HookableHttpService {
    * declare const restClient: RestClient
    * declare const authProcessor: AuthProcessor
    *
-   * const client = new AuthRestClient(restClient, authProcessor)
+   * const client = new AuthRestClient(restClient, authProcessor, {
+   *   onError: (verb, args, error) => {
+   *     console.error(`[auth-http] ${verb.toUpperCase()} ${args.url ?? ''}`, error)
+   *     return undefined // passthrough — rethrow the original error
+   *   },
+   * })
    * const response = await client.get<{ ok: boolean }>('/orders')
    * ```
    */
-  constructor(restClient: RestClient, authProcessor: AuthProcessor) {
-    super(restClient)
+  constructor(
+    restClient: RestClient,
+    authProcessor: AuthProcessor,
+    hooks?: HooksConfig,
+  ) {
+    // No rxjsPipeline forwarded — the underlying RestClient already exposes
+    // Promise-returning verbs, so the pipeline contract (defined over
+    // Observable) would be a no-op at the auth layer.
+    super(restClient, hooks)
     this.authProcessor = authProcessor
   }
 
@@ -98,8 +122,8 @@ export class AuthRestClient extends HookableHttpService {
    * stack. Exposed so module wiring (notably the single-source-of-truth
    * invariant test on {@link AuthRestModule}) and adapters can recover the
    * exact instance the {@link AuthRestClient} was constructed with — without
-   * widening the {@link HookableHttpService.httpService} field's structural
-   * type.
+   * widening the inherited `httpService` field's structural type
+   * (declared on {@link HookableHttpService}'s base).
    *
    * @example
    * ```ts
@@ -116,7 +140,7 @@ export class AuthRestClient extends HookableHttpService {
   }
 
   /**
-   * Runs the auth lifecycle inline around the base dispatch:
+   * Runs the auth lifecycle inline around the parent dispatch:
    *
    * 1. Pre-flight {@link AuthProcessor.authenticateIfNeeded} so the
    *    cached strategy is valid before the request is built.
@@ -125,7 +149,9 @@ export class AuthRestClient extends HookableHttpService {
    *    original {@link InvokeArgs} is treated as immutable so the 401 retry
    *    path can re-extend the same pristine config.
    * 3. Delegate to {@link HookableHttpService.dispatch} on the augmented
-   *    carrier, which forwards to the underlying {@link RestClient} verb.
+   *    carrier, which applies the {@link HooksConfig} lifecycle and forwards
+   *    to the underlying {@link RestClient} verb. Hooks therefore wrap the
+   *    auth lifecycle (which itself wraps the resilience pipeline).
    *
    * On a single HTTP 401 response:
    *
@@ -136,8 +162,9 @@ export class AuthRestClient extends HookableHttpService {
    *    the new credentials replace the stale `Authorization` header instead
    *    of being layered on top of it.
    * 4. A single replay against the underlying transport via
-   *    {@link HookableHttpService.callUnderlying}, bypassing the auth pre-flight
-   *    so authentication is not double-applied. Any error on the replay
+   *    `callUnderlying`, bypassing both the auth pre-flight AND the hook
+   *    lifecycle so authentication is not double-applied and hooks do not
+   *    double-fire on the same logical attempt. Any error on the replay
    *    (including a second 401) propagates as-is.
    *
    * Non-401 axios errors and non-axios errors propagate untouched so the
