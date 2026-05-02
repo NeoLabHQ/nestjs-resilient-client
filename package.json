@@ -7,7 +7,7 @@
   "homepage": "https://github.com/NeoLabHQ/nestjs-resilient-client#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NeoLabHQ/nestjs-resilient-client"
+    "url": "git+https://github.com/NeoLabHQ/nestjs-resilient-client.git"
   },
   "bugs": {
     "url": "https://github.com/NeoLabHQ/nestjs-resilient-client/issues"
