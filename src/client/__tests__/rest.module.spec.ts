@@ -51,7 +51,7 @@ const successResponse: AxiosResponse = {
  * real network calls and can assert on the verb invocations directly.
  *
  * Spreading `axios`/`resilience` only when defined preserves the
- * "factory omits the field" branch in {@link RestModule.forRootAsync} —
+ * "factory omits the field" branch in {@link RestModule.registerAsync} —
  * spreading `undefined` would still set the property and mask the omission.
  */
 async function bootstrap(opts: {
@@ -65,7 +65,7 @@ async function bootstrap(opts: {
 }> {
   const moduleRef = await Test.createTestingModule({
     imports: [
-      RestModule.forRootAsync({
+      RestModule.registerAsync({
         useFactory: () => ({
           ...(opts.axios === undefined ? {} : { axios: opts.axios }),
           ...(opts.resilience === undefined ? {} : { resilience: opts.resilience }),
@@ -87,7 +87,7 @@ async function bootstrap(opts: {
   }
 }
 
-describe('RestModule.forRootAsync', () => {
+describe('RestModule.registerAsync', () => {
   describe('bootstrap and resolution', () => {
     it('compiles a TestingModule with a factory returning empty options without throwing', async () => {
       // Empty-options bootstrap is the smallest viable wiring — exercises the
@@ -258,7 +258,7 @@ describe('RestModule.forRootAsync', () => {
       // `axios.create(config)` runs inside HttpModule.registerAsync.
       const moduleRef = await Test.createTestingModule({
         imports: [
-          RestModule.forRootAsync({
+          RestModule.registerAsync({
             useFactory: () => ({
               axios: { baseURL: 'https://api.example.com' },
             }),
@@ -276,7 +276,7 @@ describe('RestModule.forRootAsync', () => {
       // defaults.baseURL undefined.
       const moduleRef = await Test.createTestingModule({
         imports: [
-          RestModule.forRootAsync({
+          RestModule.registerAsync({
             useFactory: () => ({}),
           }),
         ],
@@ -308,7 +308,7 @@ describe('RestModule.forRootAsync', () => {
 
       const moduleRef = await Test.createTestingModule({
         imports: [
-          RestModule.forRootAsync({
+          RestModule.registerAsync({
             imports: [sentinelModule],
             inject: [SENTINEL],
             useFactory: factory,
@@ -322,7 +322,7 @@ describe('RestModule.forRootAsync', () => {
   })
 })
 
-describe('RestModule.forHttpService', () => {
+describe('RestModule.fromHttpService', () => {
   /**
    * Builds a minimal stub for the pre-resolved {@link HttpService}. The stub
    * mirrors the shape {@link RestClient} needs: a `get` mock so the
@@ -344,7 +344,7 @@ describe('RestModule.forHttpService', () => {
 
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RestModule.forHttpService({
+        RestModule.fromHttpService({
           // No `inject` and no `imports` — both default to `[]` inside the method.
           useFactory: (): RestFromHttpServiceOptions => ({
             httpService: httpStub as unknown as HttpService,
@@ -361,7 +361,7 @@ describe('RestModule.forHttpService', () => {
 
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RestModule.forHttpService({
+        RestModule.fromHttpService({
           useFactory: (): RestFromHttpServiceOptions => ({
             httpService: httpStub as unknown as HttpService,
           }),
@@ -387,7 +387,7 @@ describe('RestModule.forHttpService', () => {
 
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RestModule.forHttpService({
+        RestModule.fromHttpService({
           useFactory: (): RestFromHttpServiceOptions => ({
             httpService: httpStub as unknown as HttpService,
             resilience: override,
@@ -538,7 +538,7 @@ describe('resolveResilience truth table', () => {
   })
 })
 
-describe('RestModule.forRootAsync hooks wiring (AC-13)', () => {
+describe('RestModule.registerAsync hooks wiring (AC-13)', () => {
   it('AC-13: factory-supplied `hooks.onInvoke` runs when the DI-resolved RestClient invokes `get(...)`', async () => {
     // Pins the contract that `RestModuleOptions.hooks` is forwarded as the
     // third positional arg to `new RestClient(...)` so the HookableHttpService
@@ -550,7 +550,7 @@ describe('RestModule.forRootAsync hooks wiring (AC-13)', () => {
 
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RestModule.forRootAsync({
+        RestModule.registerAsync({
           useFactory: (): { hooks: HooksConfig } => ({
             hooks: { onInvoke },
           }),

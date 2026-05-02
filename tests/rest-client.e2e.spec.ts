@@ -267,7 +267,7 @@ describe('RestClient (e2e)', () => {
       // `timeout: 5_000` is the sole cancellation source.
       moduleRef = await Test.createTestingModule({
         imports: [
-          RestModule.forRootAsync({
+          RestModule.registerAsync({
             useFactory: () => ({
               axios: {
                 baseURL: slowBaseURL,
@@ -327,7 +327,7 @@ describe('RestClient (e2e)', () => {
 
       moduleRef = await Test.createTestingModule({
         imports: [
-          RestModule.forRootAsync({
+          RestModule.registerAsync({
             useFactory: () => ({
               axios: {
                 baseURL: slowBaseURL,

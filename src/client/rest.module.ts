@@ -10,7 +10,7 @@ import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
 
 /**
- * Minimal options for {@link RestModule.forHttpService} — the caller supplies a
+ * Minimal options for {@link RestModule.fromHttpService} — the caller supplies a
  * pre-resolved `HttpService` so the sub-module does not need to spin up its own
  * `HttpModule`. Used by {@link AuthRestModule} to delegate `RestClient` construction
  * to `RestModule`, eliminating the duplicated `new RestClient(httpService, config)`
@@ -54,7 +54,7 @@ export interface RestFromHttpServiceOptions {
 
 /**
  * Options object resolved by the consumer-supplied async factory passed to
- * {@link RestModule.forRootAsync}. Carries the two collaborating concerns the
+ * {@link RestModule.registerAsync}. Carries the two collaborating concerns the
  * module needs to wire up the resilient transport stack:
  *
  * - `axios` — forwarded verbatim to `HttpModule.registerAsync` so the
@@ -281,7 +281,7 @@ export class RestModule {
   /**
    * Builds a minimal {@link DynamicModule} that provides and exports a single
    * {@link RestClient} built from a pre-resolved `HttpService`. Unlike
-   * {@link forRootAsync}, this method does **not** register an internal
+   * {@link registerAsync}, this method does **not** register an internal
    * `HttpModule` — it expects the caller to supply the `HttpService` instance
    * directly via the `useFactory` return value.
    *
@@ -319,7 +319,7 @@ export class RestModule {
    * export class CatalogModule {}
    * ```
    */
-  static forHttpService(options: {
+  static fromHttpService(options: {
     useFactory: (
       ...args: unknown[]
     ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
@@ -341,7 +341,7 @@ export class RestModule {
           provide: RestClient,
           useFactory: async (...args: unknown[]): Promise<RestClient> => {
             const { httpService, resilience, hooks } = await options.useFactory(...args)
-            // `forHttpService` receives an explicit `httpService` and trusts
+            // `fromHttpService` receives an explicit `httpService` and trusts
             // the caller's resilience verbatim (no `resolveResilience` here —
             // there is no `axios.timeout` to reconcile against, since axios
             // configuration is the caller's concern in this delegation path).
@@ -381,7 +381,7 @@ export class RestModule {
    *
    * @Module({
    *   imports: [
-   *     RestModule.forRootAsync({
+   *     RestModule.registerAsync({
    *       imports: [ConfigModule],
    *       inject: [ConfigService],
    *       useFactory: (config: ConfigService) => ({
@@ -405,7 +405,7 @@ export class RestModule {
    * }
    * ```
    */
-  static forRootAsync(options: {
+  static registerAsync(options: {
     useFactory: (
       ...args: unknown[]
     ) => Promise<RestModuleOptions> | RestModuleOptions

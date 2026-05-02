@@ -35,6 +35,112 @@ export type RxjsPipeline = (
 ) => Observable<AxiosResponse>
 
 /**
+ * Indirection map that resolves each `ResilanceConfig` field name to the
+ * factory that produces its `RxjsPipeline` stage. The map is referenced by
+ * {@link buildRxjsPipeline} via property access (`rxjsOperatorFactories.xxx(...)`
+ * rather than a direct local function call) so jest tests can `jest.spyOn`
+ * each entry to record invocation order without monkey-patching the module
+ * exports — internal calls in TypeScript-compiled CommonJS use the LOCAL
+ * function reference (not `exports.xxx`), so spying on the module namespace
+ * would otherwise miss every call from inside `buildRxjsPipeline`.
+ *
+ * Production code does NOT need to interact with this object. It is exported
+ * solely so the spec file can spy on it.
+ */
+export const rxjsOperatorFactories = {
+  deduplication: deduplicationOperator,
+  rateLimiter: rateLimiterOperator,
+  throttling: throttlingOperator,
+}
+
+/**
+ * Composes the three RxJS resilience stages declared on a {@link ResilanceConfig}
+ * into a single {@link RxjsPipeline}. Mirrors the field-by-field filtering
+ * approach used by {@link resiliencePolicyBuilder} for cockatiel policies, so
+ * the two builders share a structural shape: collect every stage configured
+ * on the input, drop the undefined slots, and reduce the survivors into a
+ * single composed value.
+ *
+ * Composition order (declared OUTERMOST first, INNERMOST last):
+ *
+ *   `deduplication → rateLimiter → throttling`
+ *
+ * The outermost stage is the one that observes the upstream source first.
+ * Placing `deduplication` outermost means a cache hit short-circuits BEFORE
+ * the inner stages are entered — cached results bypass rate-limiting and
+ * throttling slots for subsequent callers, which is exactly what
+ * {@link ResilanceConfig.deduplication} promises.
+ *
+ * The reduction itself uses `reduceRight` so that the FIRST array entry ends
+ * up as the outermost wrapper:
+ *
+ * ```
+ * reduceRight starts at the rightmost (innermost) entry and walks LEFT:
+ *   acc = source
+ *   acc = throttling(verb, args, acc)        ← innermost wraps source
+ *   acc = rateLimiter(verb, args, acc)       ← middle wraps throttling
+ *   acc = deduplication(verb, args, acc)     ← outermost wraps everything
+ * ```
+ *
+ * Returns `undefined` when none of the three fields is set, so
+ * {@link BaseHttpService.callUnderlying} can skip the pipeline entirely without
+ * paying for an empty-reduce closure on every request. Callers MUST treat
+ * `undefined` as "no RxJS pipeline" rather than "empty pipeline" — the two are
+ * indistinguishable observationally but the `undefined` form lets the dispatch
+ * fast-path stay branch-light.
+ *
+ * @example
+ * ```ts
+ * import { buildRxjsPipeline, type ResilanceConfig } from 'nestjs-http-client'
+ *
+ * const config: ResilanceConfig<unknown> = {
+ *   deduplication: {},
+ *   throttling: { requestsPerInterval: 5, intervalMs: 1_000 },
+ * }
+ *
+ * const pipeline = buildRxjsPipeline(config)
+ * // pipeline applies deduplication first (outermost), then throttling.
+ * // rateLimiter slot is empty, so it is skipped entirely.
+ * ```
+ */
+export function buildRxjsPipeline(config: ResilanceConfig<unknown>): RxjsPipeline | undefined {
+  // Build the slot array in OUTER-to-INNER order so a reader of the source
+  // sees the documented composition order (`deduplication → rateLimiter →
+  // throttling`) without having to mentally invert anything. Each slot is
+  // either an `RxjsPipeline` produced by the corresponding factory or
+  // `undefined` when the consumer omitted that field. Calls go through
+  // `rxjsOperatorFactories.xxx` (property access) so jest spies on that
+  // object intercept invocations during composition.
+  const operators: Array<RxjsPipeline | undefined> = [
+    config.deduplication && rxjsOperatorFactories.deduplication(config.deduplication),
+    // simular to throttling, but with soft limit.
+    config.rateLimiter && rxjsOperatorFactories.rateLimiter(config.rateLimiter),
+    // Do not used default throttling operator from rxjs, 
+    // because it is not have queue and just drop requests that not fit.
+    config.throttling && rxjsOperatorFactories.throttling(config.throttling),
+  ]
+
+  const filtered = operators.filter(Boolean) as RxjsPipeline[]
+
+  if (filtered.length === 0) {
+    return undefined
+  }
+
+  // `reduceRight` walks from the innermost entry leftward, wrapping each
+  // outer stage AROUND the accumulated inner observable. The first array
+  // entry — the outermost — therefore lands as the final wrapper, which is
+  // the one that subscribers attach to. Capturing `verb`/`args`/`source` per
+  // call means each invocation builds its own composition over the per-call
+  // source, so closures over those values stay correct under concurrent use.
+  return (verb, args, source) =>
+    filtered.reduceRight<Observable<AxiosResponse>>(
+      (acc, operator) => operator(verb, args, acc),
+      source,
+    )
+}
+
+
+/**
  * Derives the default cache key for a verb invocation when the user has not
  * supplied a custom `keyBuilder`. Mirrors the documented contract on
  * {@link DeduplicationConfig}: `${verb}:${args.url ?? args.config.url ?? ''}`.
@@ -81,7 +187,7 @@ export function deduplicationOperator(config: DeduplicationConfig): RxjsPipeline
   // independent — important when a process composes multiple dedup stages
   // with different keying strategies (e.g. tenant-scoped + global).
   const cache = new Map<string, Observable<AxiosResponse>>()
-  const buildKey = config.keyBuilder ?? defaultDeduplicationKey
+  const buildKey = config.key ?? defaultDeduplicationKey
 
   return (verb, args, source) => {
     const key = buildKey(verb, args)
@@ -409,104 +515,3 @@ export function throttlingOperator(config: ThrottlingConfig): RxjsPipeline {
   }
 }
 
-/**
- * Indirection map that resolves each `ResilanceConfig` field name to the
- * factory that produces its `RxjsPipeline` stage. The map is referenced by
- * {@link buildRxjsPipeline} via property access (`rxjsOperatorFactories.xxx(...)`
- * rather than a direct local function call) so jest tests can `jest.spyOn`
- * each entry to record invocation order without monkey-patching the module
- * exports — internal calls in TypeScript-compiled CommonJS use the LOCAL
- * function reference (not `exports.xxx`), so spying on the module namespace
- * would otherwise miss every call from inside `buildRxjsPipeline`.
- *
- * Production code does NOT need to interact with this object. It is exported
- * solely so the spec file can spy on it.
- */
-export const rxjsOperatorFactories = {
-  deduplication: deduplicationOperator,
-  rateLimiter: rateLimiterOperator,
-  throttling: throttlingOperator,
-}
-
-/**
- * Composes the three RxJS resilience stages declared on a {@link ResilanceConfig}
- * into a single {@link RxjsPipeline}. Mirrors the field-by-field filtering
- * approach used by {@link resiliencePolicyBuilder} for cockatiel policies, so
- * the two builders share a structural shape: collect every stage configured
- * on the input, drop the undefined slots, and reduce the survivors into a
- * single composed value.
- *
- * Composition order (declared OUTERMOST first, INNERMOST last):
- *
- *   `deduplication → rateLimiter → throttling`
- *
- * The outermost stage is the one that observes the upstream source first.
- * Placing `deduplication` outermost means a cache hit short-circuits BEFORE
- * the inner stages are entered — cached results bypass rate-limiting and
- * throttling slots for subsequent callers, which is exactly what
- * {@link ResilanceConfig.deduplication} promises.
- *
- * The reduction itself uses `reduceRight` so that the FIRST array entry ends
- * up as the outermost wrapper:
- *
- * ```
- * reduceRight starts at the rightmost (innermost) entry and walks LEFT:
- *   acc = source
- *   acc = throttling(verb, args, acc)        ← innermost wraps source
- *   acc = rateLimiter(verb, args, acc)       ← middle wraps throttling
- *   acc = deduplication(verb, args, acc)     ← outermost wraps everything
- * ```
- *
- * Returns `undefined` when none of the three fields is set, so
- * {@link BaseHttpService.callUnderlying} can skip the pipeline entirely without
- * paying for an empty-reduce closure on every request. Callers MUST treat
- * `undefined` as "no RxJS pipeline" rather than "empty pipeline" — the two are
- * indistinguishable observationally but the `undefined` form lets the dispatch
- * fast-path stay branch-light.
- *
- * @example
- * ```ts
- * import { buildRxjsPipeline, type ResilanceConfig } from 'nestjs-http-client'
- *
- * const config: ResilanceConfig<unknown> = {
- *   deduplication: {},
- *   throttling: { requestsPerInterval: 5, intervalMs: 1_000 },
- * }
- *
- * const pipeline = buildRxjsPipeline(config)
- * // pipeline applies deduplication first (outermost), then throttling.
- * // rateLimiter slot is empty, so it is skipped entirely.
- * ```
- */
-export function buildRxjsPipeline(config: ResilanceConfig<unknown>): RxjsPipeline | undefined {
-  // Build the slot array in OUTER-to-INNER order so a reader of the source
-  // sees the documented composition order (`deduplication → rateLimiter →
-  // throttling`) without having to mentally invert anything. Each slot is
-  // either an `RxjsPipeline` produced by the corresponding factory or
-  // `undefined` when the consumer omitted that field. Calls go through
-  // `rxjsOperatorFactories.xxx` (property access) so jest spies on that
-  // object intercept invocations during composition.
-  const operators: Array<RxjsPipeline | undefined> = [
-    config.deduplication && rxjsOperatorFactories.deduplication(config.deduplication),
-    config.rateLimiter && rxjsOperatorFactories.rateLimiter(config.rateLimiter),
-    config.throttling && rxjsOperatorFactories.throttling(config.throttling),
-  ]
-
-  const filtered = operators.filter(Boolean) as RxjsPipeline[]
-
-  if (filtered.length === 0) {
-    return undefined
-  }
-
-  // `reduceRight` walks from the innermost entry leftward, wrapping each
-  // outer stage AROUND the accumulated inner observable. The first array
-  // entry — the outermost — therefore lands as the final wrapper, which is
-  // the one that subscribers attach to. Capturing `verb`/`args`/`source` per
-  // call means each invocation builds its own composition over the per-call
-  // source, so closures over those values stay correct under concurrent use.
-  return (verb, args, source) =>
-    filtered.reduceRight<Observable<AxiosResponse>>(
-      (acc, operator) => operator(verb, args, acc),
-      source,
-    )
-}

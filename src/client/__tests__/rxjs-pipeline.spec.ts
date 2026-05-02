@@ -234,13 +234,13 @@ describe('deduplicationOperator', () => {
     })
   })
 
-  describe('custom keyBuilder', () => {
+  describe('custom key builder', () => {
     /**
-     * AC: When `keyBuilder` is provided, the operator MUST use it instead of
+     * AC: When `key` is provided, the operator MUST use it instead of
      * the default `${verb}:${url}` derivation. Two requests with different
      * URLs but the same custom key MUST share one source subscription.
      */
-    it('uses the custom keyBuilder when provided', async () => {
+    it('uses the custom key builder when provided', async () => {
       const subscribe = jest.fn()
       const source$ = new Observable<AxiosResponse>((subscriber) => {
         subscribe()
@@ -252,7 +252,7 @@ describe('deduplicationOperator', () => {
 
       // Always returns the same key — every subscription should dedupe to one.
       const keyBuilder = jest.fn(() => 'shared-key')
-      const operator = deduplicationOperator({ keyBuilder })
+      const operator = deduplicationOperator({ key: keyBuilder })
 
       const a$ = operator('get', buildArgs('/users/1'), source$)
       const b$ = operator('get', buildArgs('/users/2'), source$)
@@ -262,7 +262,7 @@ describe('deduplicationOperator', () => {
         new Promise<AxiosResponse>((resolve, reject) => b$.subscribe({ next: resolve, error: reject })),
       ])
 
-      // Custom keyBuilder invoked for every operator call.
+      // Custom key builder invoked for every operator call.
       expect(keyBuilder).toHaveBeenCalledTimes(2)
       expect(keyBuilder).toHaveBeenCalledWith('get', buildArgs('/users/1'))
       expect(keyBuilder).toHaveBeenCalledWith('get', buildArgs('/users/2'))

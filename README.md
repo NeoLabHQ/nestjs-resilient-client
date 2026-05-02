@@ -93,7 +93,7 @@ Proactive policies engage *before* a failure to manage load.
 
 ## Usage
 
-For requests that do not require authentication, `RestModule.forRootAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilience` is omitted, the `CONSERVATIVE` preset is applied.
+For requests that do not require authentication, `RestModule.registerAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilience` is omitted, the `CONSERVATIVE` preset is applied.
 
 ```ts
 import { Module } from '@nestjs/common'
@@ -101,7 +101,7 @@ import { RestModule, ResilencePresets } from 'nestjs-http-client'
 
 @Module({
   imports: [
-    RestModule.forRootAsync({
+    RestModule.registerAsync({
       useFactory: () => ({
         // Forwarded verbatim to the internally-registered HttpModule.
         axios: {
@@ -138,7 +138,7 @@ export class CatalogService {
 The factory accepts the same `inject`/`imports` keys as any NestJS dynamic module, so axios and resilience configuration can be sourced from `ConfigService` or any other DI provider:
 
 ```ts
-RestModule.forRootAsync({
+RestModule.registerAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
   useFactory: (config: ConfigService) => ({
@@ -180,7 +180,7 @@ Almost identical to `CONSERVATIVE` preset, but with longer timeout.
 
 ### Timeout Precedence
 
-Two timeout channels coexist in the stack: the axios-level `timeout` (applied to every individual HTTP call by axios itself) and the resilience-level `timeout` field on `ResilanceConfig` (applied per attempt by cockatiel's `TimeoutPolicy`, wrapped INSIDE retry). `RestModule.forRootAsync` (and `AuthRestModule.forRootAsync`) reconcile the two channels at module-construction time using the following rule:
+Two timeout channels coexist in the stack: the axios-level `timeout` (applied to every individual HTTP call by axios itself) and the resilience-level `timeout` field on `ResilanceConfig` (applied per attempt by cockatiel's `TimeoutPolicy`, wrapped INSIDE retry). `RestModule.registerAsync` (and `AuthRestModule.registerAsync`) reconcile the two channels at module-construction time using the following rule:
 
 | `axios.timeout` | `opts.resilience` | Resulting resilience timeout |
 | --------------- | ----------------- | ---------------------------- |
@@ -198,7 +198,7 @@ import { RestModule } from 'nestjs-http-client'
 
 @Module({
   imports: [
-    RestModule.forRootAsync({
+    RestModule.registerAsync({
       useFactory: () => ({
         axios: {
           baseURL: 'https://api.example.com', 
@@ -215,7 +215,7 @@ import { RestModule } from 'nestjs-http-client'
 })
 export class FastAxiosTimeoutModule {}
 
-RestModule.forRootAsync({
+RestModule.registerAsync({
   useFactory: () => ({
     axios: { timeout: 5_000 },
     // Explicit user resilience.timeout WINS even when axios.timeout is also set:
@@ -225,7 +225,7 @@ RestModule.forRootAsync({
 })
 
 
-RestModule.forRootAsync({
+RestModule.registerAsync({
   useFactory: () => ({
     axios: { timeout: 0 },
     // axios.timeout: 0 is the documented "disabled" sentinel — it does NOT
@@ -236,7 +236,7 @@ RestModule.forRootAsync({
 })
 ```
 
-| The `forHttpService` delegation hook does NOT run this reconciliation — there is no `axios.timeout` to reconcile against in that path, so the caller's `resilience` is honoured verbatim.
+| The `fromHttpService` delegation hook does NOT run this reconciliation — there is no `axios.timeout` to reconcile against in that path, so the caller's `resilience` is honoured verbatim.
 
 ### Bare `RestClient` (no auth, manual wiring)
 
@@ -324,7 +324,7 @@ const customConfig: ResilanceConfig<unknown> = {
 
 @Module({
   imports: [
-    RestModule.forRootAsync({
+    RestModule.registerAsync({
       useFactory: () => ({
         axios: {
           baseURL: 'https://api.example.com',
@@ -341,7 +341,7 @@ export class DataModule {}
 
 #### Deduplication
 
-When several callers issue the same logical request concurrently, `deduplication` shares a single in-flight `Observable` subscription so the upstream sees exactly one network call. The cache entry is evicted as soon as the source completes or errors, so sequential calls always trigger a fresh request. The default cache key is `${verb}:${args.url ?? args.config.url ?? ''}`; supply `keyBuilder` to customise (e.g. include a tenant header).
+When several callers issue the same logical request concurrently, `deduplication` shares a single in-flight `Observable` subscription so the upstream sees exactly one network call. The cache entry is evicted as soon as the source completes or errors, so sequential calls always trigger a fresh request. The default cache key is `${verb}:${args.url ?? args.config.url ?? ''}`; supply `key` to customise (e.g. include a tenant header).
 
 ```ts
 import type { ResilanceConfig } from 'nestjs-http-client'
@@ -350,7 +350,7 @@ const dedupeConfig: ResilanceConfig<unknown> = {
   deduplication: {
     // Optional: include a tenant header in the cache key so requests for
     // different tenants do not collide.
-    keyBuilder: (verb, args) => {
+    key: (verb, args) => {
       const tenant = (args.config.headers as Record<string, string> | undefined)?.['X-Tenant'] ?? ''
       return `${tenant}:${verb}:${args.url ?? args.config.url ?? ''}`
     },
@@ -415,7 +415,7 @@ import { RestModule, RestClient } from 'nestjs-http-client'
 
 @Module({
   imports: [
-    RestModule.forRootAsync({
+    RestModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -496,10 +496,10 @@ class BearerTokenStrategy implements AuthStrategy {
 
 @Module({
   imports: [
-    AuthRestModule.forRootAsync({
+    AuthRestModule.registerAsync({
       // Synchronous: passed to NestJS DI as a class token, registered via
       // `useClass` self-binding so it can resolve its own constructor deps.
-      authStrategy: BearerTokenStrategy,
+      strategy: BearerTokenStrategy,
       // Async: runtime data only — axios config, optional resilience, optional hooks.
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -588,7 +588,7 @@ const hooks: HooksConfig = {
 
 @Module({
   imports: [
-    RestModule.forRootAsync({
+    RestModule.registerAsync({
       useFactory: () => ({
         axios: { baseURL: 'https://api.example.com' },
         hooks,
@@ -629,7 +629,7 @@ Public methods mirror `HttpService`:
 Authenticated facade over `RestClient`. Composes a `RestClient` (which owns the resilience policy stack) with an `AuthProcessor` (which orchestrates the authentication lifecycle by delegating to a user-supplied `AuthStrategy`).
 
 ```ts
-new AuthRestClient(restClient: RestClient, authProcessor: AuthProcessor, hooks?: HooksConfig)
+new AuthRestClient(restClient: RestClient, processor: AuthProcessor, hooks?: HooksConfig)
 ```
 
 Same public method surface as `RestClient`. Each call authenticates first, augments the request via `extendRequest`, and recovers from a single 401. The optional `hooks` argument is forwarded to `HookableHttpService` exactly like on `RestClient`.
@@ -651,27 +651,27 @@ Public methods:
 
 #### `AuthRestModule`
 
-NestJS dynamic module that wires `AUTH_MODULE_OPTIONS`, the user's `AuthStrategy` class (registered via `useClass` self-binding), `RestClient`, `AuthProcessor`, and `AuthRestClient`. Owns its own `HttpModule.registerAsync(...)` lifecycle so the consumer-supplied `axios` config flows through the same path as `RestModule.forRootAsync`. Exports `AuthRestClient` and `RestClient`.
+NestJS dynamic module that wires `AUTH_MODULE_OPTIONS`, the user's `AuthStrategy` class (registered via `useClass` self-binding), `RestClient`, `AuthProcessor`, and `AuthRestClient`. Owns its own `HttpModule.registerAsync(...)` lifecycle so the consumer-supplied `axios` config flows through the same path as `RestModule.registerAsync`. Exports `AuthRestClient` and `RestClient`.
 
 ```ts
-AuthRestModule.forRootAsync(options: {
-  authStrategy: Type<AuthStrategy>
+AuthRestModule.registerAsync(options: {
+  strategy: Type<AuthStrategy>
   useFactory: (...args: unknown[]) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
   inject?: unknown[]
   imports?: unknown[]
 }): DynamicModule
 ```
 
-- `authStrategy` — class implementing `AuthStrategy`; used as both the DI token and the `useClass` value (self-binding). Must carry `@Injectable()` if it has constructor dependencies, otherwise NestJS cannot resolve constructor parameter metadata and will throw at module bootstrap.
+- `strategy` — class implementing `AuthStrategy`; used as both the DI token and the `useClass` value (self-binding). Must carry `@Injectable()` if it has constructor dependencies, otherwise NestJS cannot resolve constructor parameter metadata and will throw at module bootstrap.
 - `useFactory` — async factory returning `AuthRestModuleOptions` (runtime data: optional `axios`, optional `resilience`, optional `hooks`).
-- `inject` / `imports` — forwarded to the internal `HttpModule.registerAsync` and `RestModule.forHttpService` calls so the factory can depend on any provider exported from `imports` (e.g. `ConfigService`).
+- `inject` / `imports` — forwarded to the internal `HttpModule.registerAsync` and `RestModule.fromHttpService` calls so the factory can depend on any provider exported from `imports` (e.g. `ConfigService`).
 
 #### `RestModule`
 
 NestJS dynamic module that wires `REST_MODULE_OPTIONS`, an internally-managed `HttpModule` (registered with the consumer-supplied axios config), and `RestClient`. Exports `RestClient`. Also valid as a static import (`imports: [RestModule]`) — the class-level `@Module({...})` populates default providers (`HttpService` + `RestClient` with the `CONSERVATIVE` preset) so the zero-config path requires no factory call.
 
 ```ts
-RestModule.forRootAsync(options: {
+RestModule.registerAsync(options: {
   useFactory: (...args: unknown[]) => Promise<RestModuleOptions> | RestModuleOptions
   inject?: unknown[]
   imports?: unknown[]
@@ -691,7 +691,7 @@ interface RestModuleOptions {
 }
 ```
 
-`AuthRestModule.forRootAsync` accepts a parallel `AuthRestModuleOptions` shape that extends `RestModuleOptions` directly — every option supported by the unauthenticated module (`axios`, `resilience`, `hooks`) is also available on the authenticated module. Note that the strategy *class token* is no longer carried inside this options object — it is passed synchronously as the top-level `authStrategy` field on `forRootAsync`'s argument so the DI container can register it before the async factory resolves.
+`AuthRestModule.registerAsync` accepts a parallel `AuthRestModuleOptions` shape that extends `RestModuleOptions` directly — every option supported by the unauthenticated module (`axios`, `resilience`, `hooks`) is also available on the authenticated module. Note that the strategy *class token* is no longer carried inside this options object — it is passed synchronously as the top-level `strategy` field on `registerAsync`'s argument so the DI container can register it before the async factory resolves.
 
 ```ts
 interface AuthRestModuleOptions extends RestModuleOptions {}
@@ -702,7 +702,7 @@ interface AuthRestModuleOptions extends RestModuleOptions {}
 `RestModule` also exposes a lower-level delegation hook for advanced consumers that already manage their own `HttpService` lifecycle:
 
 ```ts
-RestModule.forHttpService(options: {
+RestModule.fromHttpService(options: {
   useFactory: (...args: unknown[]) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
   inject?: unknown[]
   imports?: unknown[]
@@ -718,13 +718,13 @@ interface RestFromHttpServiceOptions {
 }
 ```
 
-Unlike `forRootAsync`, `forHttpService` does **not** register an internal `HttpModule` — the caller supplies a pre-resolved `HttpService` directly. Use it when a sibling module already constructs and exports the transport (for example `AuthRestModule` itself delegates `RestClient` construction to this method) and you want the canonical `new RestClient(httpService, resilience, hooks)` wiring without spinning up a second axios instance. Prefer `forRootAsync` for the typical case where the module should own the `HttpModule` registration.
+Unlike `registerAsync`, `fromHttpService` does **not** register an internal `HttpModule` — the caller supplies a pre-resolved `HttpService` directly. Use it when a sibling module already constructs and exports the transport (for example `AuthRestModule` itself delegates `RestClient` construction to this method) and you want the canonical `new RestClient(httpService, resilience, hooks)` wiring without spinning up a second axios instance. Prefer `registerAsync` for the typical case where the module should own the `HttpModule` registration.
 
 ### Configuration types
 
 #### `AuthStrategy`
 
-Strategy that owns the full lifecycle of an authentication session: performing the initial handshake, reporting whether the cached credentials are still valid, attaching them to outgoing requests, and invalidating the session when it has been rejected by the upstream service. Implementations are user-supplied classes registered with `AuthRestModule` via `authStrategy: Type<AuthStrategy>`.
+Strategy that owns the full lifecycle of an authentication session: performing the initial handshake, reporting whether the cached credentials are still valid, attaching them to outgoing requests, and invalidating the session when it has been rejected by the upstream service. Implementations are user-supplied classes registered with `AuthRestModule` via `strategy: Type<AuthStrategy>`.
 
 ```ts
 interface AuthStrategy {

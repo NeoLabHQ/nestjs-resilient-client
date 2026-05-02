@@ -174,8 +174,8 @@ describe('AuthRestClient (e2e)', () => {
       // no `httpService` field, no manual `HttpModule` wiring.
       moduleRef = await Test.createTestingModule({
         imports: [
-          AuthRestModule.forRootAsync({
-            authStrategy: CountingAuthStrategy,
+          AuthRestModule.registerAsync({
+            strategy: CountingAuthStrategy,
             useFactory: () => ({ axios: { baseURL: requireBaseUrl() } }),
           }),
         ],
@@ -200,8 +200,8 @@ describe('AuthRestClient (e2e)', () => {
     it('clears auth and re-authenticates exactly once when the server returns 401', async () => {
       moduleRef = await Test.createTestingModule({
         imports: [
-          AuthRestModule.forRootAsync({
-            authStrategy: CountingAuthStrategy,
+          AuthRestModule.registerAsync({
+            strategy: CountingAuthStrategy,
             useFactory: () => ({ axios: { baseURL: requireBaseUrl() } }),
           }),
         ],
@@ -267,8 +267,8 @@ describe('AuthRestClient (e2e)', () => {
 
       moduleRef = await Test.createTestingModule({
         imports: [
-          AuthRestModule.forRootAsync({
-            authStrategy: StampingAuthStrategy,
+          AuthRestModule.registerAsync({
+            strategy: StampingAuthStrategy,
             useFactory: () => ({
               axios: { baseURL },
               hooks: { onInvoke },

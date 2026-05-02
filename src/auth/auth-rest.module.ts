@@ -11,7 +11,7 @@ import type { AuthStrategy } from './auth.config'
 
 /**
  * Options object resolved by the consumer-supplied async factory passed to
- * {@link AuthRestModule.forRootAsync}.
+ * {@link AuthRestModule.registerAsync}.
  *
  * Extends {@link RestModuleOptions} with no additional fields — `AuthRestModule`
  * now owns its own `HttpModule` registration (driven by `axios`), so consumers
@@ -40,9 +40,9 @@ import type { AuthStrategy } from './auth.config'
  *
  * **Note on the strategy class:** the {@link AuthStrategy} *class token* is
  * passed synchronously as the top-level `authStrategy` field on
- * {@link AuthRestModule.forRootAsync}'s argument — it is *not* part of this
+ * {@link AuthRestModule.registerAsync}'s argument — it is *not* part of this
  * options object — so the DI container can register it before the async
- * factory resolves. See {@link AuthRestModule.forRootAsync} for the full
+ * factory resolves. See {@link AuthRestModule.registerAsync} for the full
  * wiring.
  *
  * @example
@@ -193,14 +193,14 @@ export const AUTH_MODULE_OPTIONS: unique symbol = Symbol('AUTH_MODULE_OPTIONS')
 export class AuthRestModule {
   /**
    * Builds a fully wired {@link DynamicModule} from a synchronous
-   * `authStrategy` class token plus a consumer-supplied async factory for
+   * `strategy` class token plus a consumer-supplied async factory for
    * runtime data. Mirrors the standard NestJS `forRootAsync` shape on the
    * async side: the factory receives whatever providers are listed in
    * `inject` and returns (or resolves to) an {@link AuthRestModuleOptions}
    * object.
    *
    * The strategy class is registered via `useClass` self-binding
-   * (`{ provide: options.authStrategy, useClass: options.authStrategy }`),
+   * (`{ provide: options.strategy, useClass: options.strategy }`),
    * which makes it a full DI citizen with access to constructor-injected
    * dependencies. Strategy classes with constructor dependencies MUST carry
    * `@Injectable()` so NestJS can resolve their parameter metadata.
@@ -210,7 +210,7 @@ export class AuthRestModule {
    * surfaces accidental cycles as straight-line dependency errors:
    *
    * 1. {@link AUTH_MODULE_OPTIONS} (no internal deps; depends only on `inject`)
-   * 2. Strategy self-binding `{ provide: authStrategy, useClass: authStrategy }`
+   * 2. Strategy self-binding `{ provide: strategy, useClass: strategy }`
    *    (depends on whatever the strategy class itself injects)
    * 3. {@link AuthProcessor} (depends on the strategy token + RestClient)
    * 4. {@link AuthRestClient} (depends on RestClient + AuthProcessor)
@@ -225,7 +225,7 @@ export class AuthRestModule {
    * `HttpModule` themselves.
    *
    * @param options - Module wiring descriptor.
-   * @param options.authStrategy - Class implementing {@link AuthStrategy}; used
+   * @param options.strategy - Class implementing {@link AuthStrategy}; used
    *   as both the DI token and the `useClass` value (self-binding). Must carry
    *   `@Injectable()` if it has constructor dependencies.
    * @param options.useFactory - Async factory returning {@link AuthRestModuleOptions}
@@ -252,15 +252,15 @@ export class AuthRestModule {
    *   invalidate() {}
    * }
    *
-   * AuthRestModule.forRootAsync({
-   *   authStrategy: StaticBearerStrategy,
+   * AuthRestModule.registerAsync({
+   *   strategy: StaticBearerStrategy,
    *   inject: [HttpService],
    *   useFactory: (httpService: HttpService) => ({ httpService }),
    * })
    * ```
    */
-  static forRootAsync(options: {
-    authStrategy: Type<AuthStrategy>
+  static registerAsync(options: {
+    strategy: Type<AuthStrategy>
     useFactory: (
       ...args: unknown[]
     ) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
@@ -350,8 +350,8 @@ export class AuthRestModule {
         //    while still letting it pull its own dependencies from the
         //    surrounding module scope.
         {
-          provide: options.authStrategy,
-          useClass: options.authStrategy,
+          provide: options.strategy,
+          useClass: options.strategy,
         },
         // 4. AuthProcessor: receives the DI-resolved strategy instance plus
         //    the resilient RestClient (provided above) so its auth handshake
@@ -365,7 +365,7 @@ export class AuthRestModule {
             strategy: AuthStrategy,
             client: RestClient,
           ): AuthProcessor => new AuthProcessor(strategy, client),
-          inject: [options.authStrategy, RestClient],
+          inject: [options.strategy, RestClient],
         },
         // 5. AuthRestClient: top-level facade composed from the two
         //    collaborators above. Reads `hooks` from AUTH_MODULE_OPTIONS so

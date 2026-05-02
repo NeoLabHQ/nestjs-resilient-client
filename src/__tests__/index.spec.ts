@@ -161,7 +161,7 @@ describe('public surface (src/index.ts)', () => {
       // fields. Drift in any field — for example renaming `refillRatePerSec`
       // or making `strategy` optional — is caught here at typecheck time.
       const dedup: DeduplicationConfig = {
-        keyBuilder: (verb, args) => `${verb}:${args.url ?? ''}`,
+        key: (verb, args) => `${verb}:${args.url ?? ''}`,
       }
       const limiter: RateLimiterConfig = {
         strategy: 'token-bucket',

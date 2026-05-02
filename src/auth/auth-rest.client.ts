@@ -57,22 +57,6 @@ import type { AuthProcessor } from './auth-processor'
  * ```
  */
 export class AuthRestClient extends HookableHttpService {
-  /**
-   * Public-readable authentication processor. Public because module wiring,
-   * tests, and adapters (e.g. middleware that inspects auth state) read the
-   * cached strategy directly off the client.
-   *
-   * @example
-   * ```ts
-   * declare const authRestClient: AuthRestClient
-   *
-   * // Inspect the current authentication session without triggering a request.
-   * if (!authRestClient.authProcessor.isAuthenticated()) {
-   *   await authRestClient.authProcessor.authenticateIfNeeded()
-   * }
-   * ```
-   */
-  readonly authProcessor: AuthProcessor
 
   /**
    * Composes the resilient transport with the authentication lifecycle. Both
@@ -81,7 +65,7 @@ export class AuthRestClient extends HookableHttpService {
    * manually.
    *
    * @param restClient - Resilient HTTP client owning the cockatiel policy stack.
-   * @param authProcessor - Processor coordinating the per-request auth lifecycle.
+   * @param processor - Processor coordinating the per-request auth lifecycle.
    * @param hooks - Optional {@link HooksConfig} forwarded to
    *   {@link HookableHttpService}. Hooks wrap the entire auth lifecycle (and
    *   therefore the resilience pipeline owned by {@link RestClient}). No
@@ -107,14 +91,13 @@ export class AuthRestClient extends HookableHttpService {
    */
   constructor(
     restClient: RestClient,
-    authProcessor: AuthProcessor,
+    readonly processor: AuthProcessor,
     hooks?: HooksConfig,
   ) {
     // No rxjsPipeline forwarded — the underlying RestClient already exposes
     // Promise-returning verbs, so the pipeline contract (defined over
     // Observable) would be a no-op at the auth layer.
     super(restClient, hooks)
-    this.authProcessor = authProcessor
   }
 
   /**
@@ -176,10 +159,10 @@ export class AuthRestClient extends HookableHttpService {
     initialArgs: InvokeArgs,
   ): Promise<AxiosResponse<T>> {
     try {
-      await this.authProcessor.authenticateIfNeeded()
+      await this.processor.authenticateIfNeeded()
       const authedArgs: InvokeArgs = {
         ...initialArgs,
-        config: this.authProcessor.extendRequest(initialArgs.config),
+        config: this.processor.extendRequest(initialArgs.config),
       }
       return await super.dispatch<T>(verb, authedArgs)
     }
@@ -188,13 +171,13 @@ export class AuthRestClient extends HookableHttpService {
         throw error
       }
 
-      this.authProcessor.clearAuth()
-      await this.authProcessor.authenticateIfNeeded()
+      this.processor.clearAuth()
+      await this.processor.authenticateIfNeeded()
       const retryArgs: InvokeArgs = {
         ...initialArgs,
-        config: this.authProcessor.extendRequest(initialArgs.config),
+        config: this.processor.extendRequest(initialArgs.config),
       }
-      return await this.callUnderlying<T>(verb, retryArgs)
+      return await super.dispatch<T>(verb, retryArgs)
     }
   }
 }

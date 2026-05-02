@@ -200,8 +200,8 @@ async function bootstrap(opts: {
 }> {
   const moduleRef = await Test.createTestingModule({
     imports: [
-      AuthRestModule.forRootAsync({
-        authStrategy: opts.authStrategy ?? StubAuthStrategy,
+      AuthRestModule.registerAsync({
+        strategy: opts.authStrategy ?? StubAuthStrategy,
         useFactory: () => ({
           ...(opts.axios === undefined ? {} : { axios: opts.axios }),
           ...(opts.resilience === undefined ? {} : { resilience: opts.resilience }),
@@ -226,7 +226,7 @@ async function bootstrap(opts: {
   }
 }
 
-describe('AuthRestModule.forRootAsync', () => {
+describe('AuthRestModule.registerAsync', () => {
   describe('bootstrap and resolution', () => {
     it('compiles a TestingModule with a factory returning empty options without throwing', async () => {
       const httpServiceStub = buildHttpServiceStub(successResponse)
@@ -273,11 +273,10 @@ describe('AuthRestModule.forRootAsync', () => {
 
       const { authRestClient } = await bootstrap({ httpServiceStub })
 
-      // Field rename invariant: the legacy `authStrategy` collaborator was
-      // replaced by `authProcessor` (an `AuthProcessor` instance). This
-      // assertion fixes the wiring contract so future refactors that drop
+      // Field invariant: the `processor` field is the `AuthProcessor` instance.
+      // This assertion fixes the wiring contract so future refactors that drop
       // the field, rename it, or wire the wrong class are caught here.
-      expect(authRestClient.authProcessor).toBeInstanceOf(AuthProcessor)
+      expect(authRestClient.processor).toBeInstanceOf(AuthProcessor)
     })
   })
 
@@ -289,8 +288,8 @@ describe('AuthRestModule.forRootAsync', () => {
 
       const moduleRef = await Test.createTestingModule({
         imports: [
-          AuthRestModule.forRootAsync({
-            authStrategy: StrategyWithDeps,
+          AuthRestModule.registerAsync({
+            strategy: StrategyWithDeps,
             imports: [SentinelModule],
             useFactory: () => ({}),
           }),

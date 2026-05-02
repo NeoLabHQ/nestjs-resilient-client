@@ -111,12 +111,12 @@ function buildSut(): {
 
 describe('AuthRestClient', () => {
   describe('constructor and field visibility', () => {
-    it('exposes authProcessor as a public-readable field', () => {
+    it('exposes processor as a public-readable field', () => {
       const { client, authStrategy } = buildSut()
 
-      // Module wiring and adapters read `client.authProcessor` directly, so
+      // Module wiring and adapters read `client.processor` directly, so
       // the field MUST be public-readable on the instance.
-      expect(client.authProcessor).toBe(authStrategy)
+      expect(client.processor).toBe(authStrategy)
     })
   })
 

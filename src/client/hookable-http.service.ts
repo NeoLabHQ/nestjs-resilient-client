@@ -175,30 +175,27 @@ export interface InvokeArgs {
  * ```
  */
 export abstract class BaseHttpService {
-  /**
-   * Underlying transport this facade wraps. Stored as the structural
-   * {@link HttpServiceLike} so the same dispatcher works for `HttpService`
-   * (returns `Observable`) and for {@link RestClient} (returns `Promise`).
-   */
-  protected readonly httpService: HttpServiceLike
 
-  /**
-   * Optional RxJS pipeline applied to `Observable<AxiosResponse>` results from
-   * the underlying transport BEFORE they are normalised via `firstValueFrom`.
-   *
-   * The slot lets reactive resilience operators (deduplication, rate limiting,
-   * throttling) interpose on the source stream without leaking those concerns
-   * into {@link callUnderlying}. The pipeline is applied ONLY when the
-   * underlying transport returns an `Observable`; transports that return a
-   * `Promise` (e.g. {@link RestClient} when wrapped by {@link AuthRestClient})
-   * skip the pipeline entirely.
-   */
-  protected readonly rxjsPipeline?: RxjsPipeline
-
-  constructor(httpService: HttpServiceLike, rxjsPipeline?: RxjsPipeline) {
-    this.httpService = httpService
-    this.rxjsPipeline = rxjsPipeline
-  }
+  constructor(
+    /**
+     * Underlying transport this facade wraps. Stored as the structural
+     * {@link HttpServiceLike} so the same dispatcher works for `HttpService`
+     * (returns `Observable`) and for {@link RestClient} (returns `Promise`).
+     */
+    protected readonly httpService: HttpServiceLike,
+    /**
+     * Optional RxJS pipeline applied to `Observable<AxiosResponse>` results from
+     * the underlying transport BEFORE they are normalised via `firstValueFrom`.
+     *
+     * The slot lets reactive resilience operators (deduplication, rate limiting,
+     * throttling) interpose on the source stream without leaking those concerns
+     * into {@link callUnderlying}. The pipeline is applied ONLY when the
+     * underlying transport returns an `Observable`; transports that return a
+     * `Promise` (e.g. {@link RestClient} when wrapped by {@link AuthRestClient})
+     * skip the pipeline entirely.
+     */
+    protected readonly rxjsPipeline?: RxjsPipeline
+  ) {}
 
   /**
    * Dispatches a verb to the underlying transport. The default implementation
@@ -602,17 +599,17 @@ export interface HooksConfig {
  * ```
  */
 export class HookableHttpService extends BaseHttpService {
-  /**
-   * User-supplied hook configuration. Stored as `protected readonly` so
-   * subclasses (or test doubles) can introspect the configuration without
-   * dropping back to a wider cast, but the field is never re-assigned after
-   * construction.
-   */
-  protected readonly hooks: HooksConfig
-
   constructor(
     httpService: HttpServiceLike,
-    hooks?: HooksConfig,
+    /**
+     * User-supplied hook configuration. Stored as `protected readonly` so
+     * subclasses (or test doubles) can introspect the configuration without
+     * dropping back to a wider cast, but the field is never re-assigned after
+     * construction.
+     */
+    // Default to an empty object so the dispatch override can read
+    // `this.hooks.onInvoke` without a separate undefined-guard on every call.
+    protected readonly hooks: HooksConfig = {},
     rxjsPipeline?: RxjsPipeline,
   ) {
     // Forward the rxjsPipeline to BaseHttpService so the reactive pipeline
@@ -620,9 +617,6 @@ export class HookableHttpService extends BaseHttpService {
     // `callUnderlying`. Hooks live one layer above — they wrap the entire
     // dispatch (including the pipeline-aware call into the transport).
     super(httpService, rxjsPipeline)
-    // Default to an empty object so the dispatch override can read
-    // `this.hooks.onInvoke` without a separate undefined-guard on every call.
-    this.hooks = hooks ?? {}
   }
 
   /**

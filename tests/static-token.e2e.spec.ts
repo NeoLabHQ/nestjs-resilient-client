@@ -50,7 +50,7 @@ describe('Static-token RestModule (e2e)', () => {
     const baseURL = requireBaseUrl()
     return Test.createTestingModule({
       imports: [
-        RestModule.forRootAsync({
+        RestModule.registerAsync({
           useFactory: () => ({
             axios: {
               baseURL,

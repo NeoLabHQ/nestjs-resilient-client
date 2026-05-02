@@ -238,7 +238,7 @@ export interface DeduplicationConfig {
      * key is `${verb}:${args.url ?? args.config.url ?? ''}`. Two requests
      * that resolve to the same key share a single in-flight subscription.
      */
-    keyBuilder?: (verb: HttpVerb, args: InvokeArgs) => string;
+    key?: (verb: HttpVerb, args: InvokeArgs) => string;
 }
 
 /**
