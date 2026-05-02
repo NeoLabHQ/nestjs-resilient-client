@@ -2,7 +2,7 @@ import type { AxiosResponse } from 'axios'
 import { Observable, Subject, lastValueFrom, of, throwError, toArray } from 'rxjs'
 
 import { buildRxjsPipeline, deduplicationOperator, rateLimiterOperator, rxjsOperatorFactories, throttlingOperator, type RxjsPipeline } from '../rxjs-pipeline'
-import type { HttpVerb, InvokeArgs } from '../hookable-http.service'
+import type { HttpVerb, InvokeArgs } from '../base-http.service'
 import type { ResilanceConfig } from '../resilance.config'
 
 /**

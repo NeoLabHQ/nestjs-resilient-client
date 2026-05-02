@@ -1,6 +1,7 @@
 import * as publicSurface from '../index'
 
-import { BaseHttpService, HookableHttpService } from '../client/hookable-http.service'
+import { BaseHttpService } from '../client/base-http.service'
+import { HookableHttpService } from '../client/hookable-http.service'
 import { RestClient } from '../client/rest.client'
 import { RestModule } from '../client/rest.module'
 import { AuthRestClient } from '../auth/auth-rest.client'

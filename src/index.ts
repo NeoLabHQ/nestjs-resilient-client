@@ -1,5 +1,6 @@
 // Runtime client classes
-export { BaseHttpService, HookableHttpService } from './client/hookable-http.service'
+export { BaseHttpService } from './client/base-http.service'
+export { HookableHttpService } from './client/hookable-http.service'
 export { RestClient } from './client/rest.client'
 export { RestModule, REST_MODULE_OPTIONS } from './client/rest.module'
 export { AuthRestClient } from './auth/auth-rest.client'
@@ -17,8 +18,8 @@ export type {
   HttpServiceLike,
   HttpVerb,
   InvokeArgs,
-  HooksConfig,
-} from './client/hookable-http.service'
+} from './client/base-http.service'
+export type { HooksConfig } from './client/hookable-http.service'
 
 // Type-only exports — resilience configuration surface
 export type {

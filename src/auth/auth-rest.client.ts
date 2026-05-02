@@ -1,6 +1,7 @@
 import { isAxiosError, type AxiosResponse } from 'axios'
 
-import { HookableHttpService, type HooksConfig, type HttpVerb, type InvokeArgs } from '../client/hookable-http.service'
+import type { HttpVerb, InvokeArgs } from '../client/base-http.service'
+import { HookableHttpService, type HooksConfig } from '../client/hookable-http.service'
 import { RestClient } from '../client/rest.client'
 import type { AuthProcessor } from './auth-processor'
 

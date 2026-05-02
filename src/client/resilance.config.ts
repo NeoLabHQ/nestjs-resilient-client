@@ -11,7 +11,7 @@ import type {
     ISuccessEvent,
     TimeoutStrategy,
 } from "cockatiel";
-import type { HttpVerb, InvokeArgs } from "./hookable-http.service";
+import type { HttpVerb, InvokeArgs } from "./base-http.service";
 
 /**
  * Configuration for the retry policy. Controls how many attempts are made,

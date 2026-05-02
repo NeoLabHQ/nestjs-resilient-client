@@ -3,11 +3,13 @@ import { type Observable, of } from 'rxjs'
 
 import {
   BaseHttpService,
-  HookableHttpService,
-  type HooksConfig,
   type HttpServiceLike,
   type HttpVerb,
   type InvokeArgs,
+} from '../base-http.service'
+import {
+  HookableHttpService,
+  type HooksConfig,
 } from '../hookable-http.service'
 import type { RxjsPipeline } from '../rxjs-pipeline'
 

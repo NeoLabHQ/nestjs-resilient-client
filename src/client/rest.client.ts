@@ -8,7 +8,8 @@ import type {
 import type { Loggable } from 'nestjs-log-decorator'
 
 import { ResilencePresets } from '../resilence.policy'
-import { HookableHttpService, type HooksConfig, type HttpVerb, type InvokeArgs } from './hookable-http.service'
+import type { HttpVerb, InvokeArgs } from './base-http.service'
+import { HookableHttpService, type HooksConfig } from './hookable-http.service'
 import { resiliencePolicyBuilder } from './resailencePolicyBuilder'
 import type { ResilanceConfig } from './resilance.config'
 import { buildRxjsPipeline } from './rxjs-pipeline'

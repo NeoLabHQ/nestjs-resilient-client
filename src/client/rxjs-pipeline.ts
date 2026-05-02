@@ -1,7 +1,7 @@
 import type { AxiosResponse } from 'axios'
 import type { Subscription } from 'rxjs'
 import { BehaviorSubject, Observable, concatMap, delay, filter, finalize, interval, map, of, shareReplay, take, tap } from 'rxjs'
-import type { HttpVerb, InvokeArgs } from './hookable-http.service'
+import type { HttpVerb, InvokeArgs } from './base-http.service'
 import type { DeduplicationConfig, RateLimiterConfig, ResilanceConfig, ThrottlingConfig } from './resilance.config'
 
 /**
