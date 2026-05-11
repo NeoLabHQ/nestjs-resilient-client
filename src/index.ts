@@ -8,7 +8,8 @@ export { AuthProcessor } from './auth/auth-processor'
 export { AuthRestModule } from './auth/auth-rest.module'
 
 // Resilience presets — enum carries runtime + type sides, so re-exported as a value
-export { ResilencePresets, resiliencePolicyPresets } from './resilence.policy'
+export * from './resilence.policy'
+export * from './shouldRetry'
 
 // Type-only exports — auth surface
 export type { AuthStrategy } from './auth/auth.config'
