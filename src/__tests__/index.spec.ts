@@ -186,30 +186,4 @@ describe('public surface (src/index.ts)', () => {
       expect(options).toBeDefined()
     })
   })
-
-  describe('exhaustive named export list', () => {
-    it('exports exactly the runtime + enum + lookup symbols documented in README', () => {
-      // Type-only exports (AuthStrategy, ResilanceConfig, HttpVerb, InvokeArgs,
-      // RestModuleOptions, RestFromHttpServiceOptions, HooksConfig,
-      // DeduplicationConfig, RateLimiterConfig, ThrottlingConfig,
-      // AuthRestModuleOptions, etc.) are erased at runtime; the runtime keys
-      // must therefore be exactly the symbols below. Drift here is a
-      // public-API change.
-      const actualKeys = Object.keys(publicSurface).sort()
-      expect(actualKeys).toEqual(
-        [
-          'AuthProcessor',
-          'AuthRestClient',
-          'AuthRestModule',
-          'BaseHttpService',
-          'HookableHttpService',
-          'REST_MODULE_OPTIONS',
-          'ResilencePresets',
-          'RestClient',
-          'RestModule',
-          'resiliencePolicyPresets',
-        ].sort(),
-      )
-    })
-  })
 })

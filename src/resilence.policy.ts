@@ -5,7 +5,7 @@ import { isRetryableError, SAFE_HTTP_METHODS } from "./shouldRetry";
 // Method names MUST be uppercased to match `isMethodInList`, which uppercases
 // the request's `error.config.method` before lookup. Mixing case here silently
 // disables retries for the extended verbs and breaks the RESTFULL preset.
-const IDEMPOTENT_HTTP_METHODS = SAFE_HTTP_METHODS.concat(['PUT', 'DELETE']);
+export const IDEMPOTENT_HTTP_METHODS = SAFE_HTTP_METHODS.concat(['PUT', 'DELETE']);
 
 export const safeMethodsRetry: RetryConfig<unknown> = {
     maxAttempts: 3,
