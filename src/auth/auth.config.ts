@@ -51,7 +51,7 @@ import type { RestClient } from "../client/rest.client";
  *     this.expiresAt = Date.now() + response.data.expires_in * 1_000 - 60_000
  *   }
  *
- *   isAuthenticated(): boolean {
+ *   async isAuthenticated(): Promise<boolean> {
  *     return this.token !== undefined && Date.now() < this.expiresAt
  *   }
  *
@@ -62,7 +62,7 @@ import type { RestClient } from "../client/rest.client";
  *     }
  *   }
  *
- *   invalidate(): void {
+ *   async invalidate(): Promise<void> {
  *     this.token = undefined
  *     this.expiresAt = 0
  *   }
@@ -86,13 +86,17 @@ export interface AuthStrategy {
     authenticate(client: RestClient): Promise<void>;
 
     /**
-     * Returns `true` while the current credentials are still considered valid.
-     * Implementations typically compare a token expiry timestamp against the
-     * current time, optionally with a safety margin. Must return `false` when
-     * no session has been established yet or after {@link invalidate} has been
-     * called.
+     * Resolves with `true` while the current credentials are still considered
+     * valid. Implementations typically compare a token expiry timestamp
+     * against the current time, optionally with a safety margin. Must resolve
+     * with `false` when no session has been established yet or after
+     * {@link invalidate} has been called.
+     *
+     * Asynchronous so implementations can consult persisted credential stores
+     * (filesystem, keychain, remote token-introspection endpoints, etc.)
+     * without blocking the dispatch path on synchronous I/O.
      */
-    isAuthenticated(): boolean;
+    isAuthenticated(): Promise<boolean>;
 
     /**
      * Returns a new {@link AxiosRequestConfig} with authentication material
@@ -103,10 +107,13 @@ export interface AuthStrategy {
 
     /**
      * Drops the current session so that the next request triggers a fresh
-     * {@link authenticate} call. After this method returns, {@link isAuthenticated}
-     * must report `false` until a successful handshake re-establishes the
-     * session. Typically invoked by the consuming infrastructure after the
-     * upstream service rejects a request with HTTP 401.
+     * {@link authenticate} call. Resolves once the session has been dropped
+     * (asynchronous so implementations can flush persisted credentials, await
+     * remote sign-out endpoints, etc.). After the returned promise resolves,
+     * {@link isAuthenticated} must report `false` until a successful handshake
+     * re-establishes the session. Typically invoked by the consuming
+     * infrastructure after the upstream service rejects a request with HTTP
+     * 401.
      */
-    invalidate(): void;
+    invalidate(): Promise<void>;
 }

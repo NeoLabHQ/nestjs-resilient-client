@@ -65,7 +65,7 @@ const AUTHENTICATE_DEDUP_KEY = "authenticate";
  * const extended = processor.extendRequest({ url: '/orders' })
  * // -> { url: '/orders', headers: { Authorization: 'Bearer ...' } }
  *
- * processor.clearAuth() // -> strategy.invalidate(); next call re-authenticates
+ * await processor.clearAuth() // -> strategy.invalidate(); next call re-authenticates
  * ```
  */
 export class AuthProcessor {
@@ -120,34 +120,37 @@ export class AuthProcessor {
     ) {}
 
     /**
-     * Returns whatever the injected strategy reports about its current
+     * Resolves with whatever the injected strategy reports about its current
      * session validity. The processor caches nothing of its own — the
-     * strategy is the single source of truth.
+     * strategy is the single source of truth. Asynchronous because
+     * {@link AuthStrategy.isAuthenticated} is asynchronous (implementations
+     * may consult persisted credential stores or remote introspection
+     * endpoints).
      *
      * @example
      * ```ts
      * const processor = new AuthProcessor(strategy, restClient)
      *
-     * if (!processor.isAuthenticated()) {
+     * if (!(await processor.isAuthenticated())) {
      *   await processor.authenticateIfNeeded()
      * }
-     * // -> true once a successful handshake has completed
+     * // -> resolves to true once a successful handshake has completed
      * ```
      */
-    isAuthenticated(): boolean {
-        return this.strategy.isAuthenticated();
+    async isAuthenticated(): Promise<boolean> {
+        return await this.strategy.isAuthenticated();
     }
 
     /**
      * Ensures a valid authentication session exists. Short-circuits when
-     * {@link isAuthenticated} returns `true`; otherwise delegates to the
+     * {@link isAuthenticated} resolves with `true`; otherwise delegates to the
      * deduplicated {@link performAuthenticate} so concurrent callers share
      * a single underlying handshake.
      *
      * Race-safety note: even when two concurrent callers both observe
-     * `isAuthenticated() === false` and proceed to `performAuthenticate()`,
-     * `@DeduplicateInflight` collapses them into one `strategy.authenticate`
-     * invocation (single-flight invariant).
+     * `await isAuthenticated() === false` and proceed to
+     * `performAuthenticate()`, `@DeduplicateInflight` collapses them into one
+     * `strategy.authenticate` invocation (single-flight invariant).
      *
      * @example
      * ```ts
@@ -163,7 +166,7 @@ export class AuthProcessor {
      * ```
      */
     async authenticateIfNeeded(): Promise<void> {
-        if (this.isAuthenticated()) {
+        if (await this.isAuthenticated()) {
             return;
         }
 
@@ -191,24 +194,27 @@ export class AuthProcessor {
 
     /**
      * Invalidates the strategy's session by delegating to
-     * {@link AuthStrategy.invalidate}. After this call,
-     * {@link isAuthenticated} returns `false` and the next
-     * {@link authenticateIfNeeded} triggers a fresh handshake. Used by
-     * `AuthRestClient`'s 401 retry path.
+     * {@link AuthStrategy.invalidate}. Resolves once the strategy has
+     * finished dropping its session state; awaiting is required because
+     * {@link AuthStrategy.invalidate} is asynchronous (implementations may
+     * flush persisted credentials, hit a remote sign-out endpoint, etc.).
+     * After the returned promise resolves, {@link isAuthenticated} resolves
+     * with `false` and the next {@link authenticateIfNeeded} triggers a fresh
+     * handshake. Used by `AuthRestClient`'s 401 retry path.
      *
      * @example
      * ```ts
      * const processor = new AuthProcessor(strategy, restClient)
      * await processor.authenticateIfNeeded()
-     * // processor.isAuthenticated() === true
+     * // await processor.isAuthenticated() === true
      *
-     * processor.clearAuth()
-     * // processor.isAuthenticated() === false
+     * await processor.clearAuth()
+     * // await processor.isAuthenticated() === false
      * // Next authenticateIfNeeded() call triggers a fresh handshake.
      * ```
      */
-    clearAuth(): void {
-        this.strategy.invalidate();
+    async clearAuth(): Promise<void> {
+        await this.strategy.invalidate();
     }
 
     /**

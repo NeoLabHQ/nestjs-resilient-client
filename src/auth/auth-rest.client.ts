@@ -172,7 +172,7 @@ export class AuthRestClient extends HookableHttpService {
         throw error
       }
 
-      this.processor.clearAuth()
+      await this.processor.clearAuth()
       await this.processor.authenticateIfNeeded()
       const retryArgs: InvokeArgs = {
         ...initialArgs,

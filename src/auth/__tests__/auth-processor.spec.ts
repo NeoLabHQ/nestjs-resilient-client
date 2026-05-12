@@ -19,9 +19,9 @@ const delay = (ms: number): Promise<void> =>
  */
 interface AuthStrategyStub extends AuthStrategy {
   authenticate: jest.Mock<Promise<void>, [RestClient]>;
-  isAuthenticated: jest.Mock<boolean, []>;
+  isAuthenticated: jest.Mock<Promise<boolean>, []>;
   extendRequest: jest.Mock<AxiosRequestConfig, [AxiosRequestConfig]>;
-  invalidate: jest.Mock<void, []>;
+  invalidate: jest.Mock<Promise<void>, []>;
 }
 
 /**
@@ -33,7 +33,7 @@ interface AuthStrategyStub extends AuthStrategy {
 function createStrategyStub(): AuthStrategyStub {
   return {
     authenticate: jest.fn().mockResolvedValue(undefined),
-    isAuthenticated: jest.fn().mockReturnValue(true),
+    isAuthenticated: jest.fn().mockResolvedValue(true),
     extendRequest: jest.fn(
       (config: AxiosRequestConfig): AxiosRequestConfig => ({
         ...config,
@@ -43,7 +43,7 @@ function createStrategyStub(): AuthStrategyStub {
         },
       }),
     ),
-    invalidate: jest.fn(),
+    invalidate: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -56,29 +56,63 @@ const fakeClient = { iAm: "the-rest-client" } as unknown as RestClient;
 
 describe("AuthProcessor", () => {
   describe("isAuthenticated()", () => {
-    it("returns true when the strategy reports authenticated", () => {
+    it("resolves with true when the strategy reports authenticated", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(true);
+      strategy.isAuthenticated.mockResolvedValue(true);
       const processor = new AuthProcessor(strategy, fakeClient);
 
-      expect(processor.isAuthenticated()).toBe(true);
+      await expect(processor.isAuthenticated()).resolves.toBe(true);
       expect(strategy.isAuthenticated).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false when the strategy reports unauthenticated", () => {
+    it("resolves with false when the strategy reports unauthenticated", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(false);
+      strategy.isAuthenticated.mockResolvedValue(false);
       const processor = new AuthProcessor(strategy, fakeClient);
 
-      expect(processor.isAuthenticated()).toBe(false);
+      await expect(processor.isAuthenticated()).resolves.toBe(false);
       expect(strategy.isAuthenticated).toHaveBeenCalledTimes(1);
+    });
+
+    it("awaits the strategy's async isAuthenticated before resolving (deferred Promise ordering)", async () => {
+      // Pins the awaited-delegation invariant: `AuthProcessor.isAuthenticated`
+      // MUST `await this.strategy.isAuthenticated()` rather than returning the
+      // raw Promise unchanged or eagerly resolving. A regression that dropped
+      // the await would still type-check (the method would simply return
+      // `Promise<Promise<boolean>>` flattened by the runtime). This test gates
+      // the ordering with a deferred Promise that only resolves when the test
+      // explicitly releases it.
+      const strategy = createStrategyStub();
+      let resolveIsAuth!: (value: boolean) => void;
+      const deferred = new Promise<boolean>((resolve) => {
+        resolveIsAuth = resolve;
+      });
+      strategy.isAuthenticated.mockReturnValueOnce(deferred);
+      const processor = new AuthProcessor(strategy, fakeClient);
+
+      let settled = false;
+      const checkPromise = processor.isAuthenticated().then((value) => {
+        settled = true;
+        return value;
+      });
+
+      // Drain microtasks/macrotasks — the inner Promise is still pending, so
+      // the outer Promise must NOT have settled yet. A regression that
+      // bypassed the await (e.g., returning a stale cached value) would have
+      // resolved before the test released the deferred.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+
+      resolveIsAuth(true);
+      await expect(checkPromise).resolves.toBe(true);
+      expect(settled).toBe(true);
     });
   });
 
   describe("authenticateIfNeeded()", () => {
-    it("skips strategy.authenticate when strategy.isAuthenticated() returns true", async () => {
+    it("skips strategy.authenticate when strategy.isAuthenticated() resolves with true", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(true);
+      strategy.isAuthenticated.mockResolvedValue(true);
       const processor = new AuthProcessor(strategy, fakeClient);
 
       await processor.authenticateIfNeeded();
@@ -86,9 +120,9 @@ describe("AuthProcessor", () => {
       expect(strategy.authenticate).not.toHaveBeenCalled();
     });
 
-    it("calls strategy.authenticate when strategy.isAuthenticated() returns false", async () => {
+    it("calls strategy.authenticate when strategy.isAuthenticated() resolves with false", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(false);
+      strategy.isAuthenticated.mockResolvedValue(false);
       const processor = new AuthProcessor(strategy, fakeClient);
 
       await processor.authenticateIfNeeded();
@@ -98,7 +132,7 @@ describe("AuthProcessor", () => {
 
     it("forwards the configured client to strategy.authenticate(client)", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(false);
+      strategy.isAuthenticated.mockResolvedValue(false);
       const processor = new AuthProcessor(strategy, fakeClient);
 
       await processor.authenticateIfNeeded();
@@ -108,7 +142,7 @@ describe("AuthProcessor", () => {
 
     it("coalesces concurrent first-time callers into exactly ONE strategy.authenticate invocation (single-flight)", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(false);
+      strategy.isAuthenticated.mockResolvedValue(false);
       strategy.authenticate.mockImplementation(async () => {
         // 50ms delay guarantees that all concurrent callers land while
         // the first call is still in flight, so @DeduplicateInflight must
@@ -132,7 +166,7 @@ describe("AuthProcessor", () => {
 
     it("clears the inflight entry after the awaited promise resolves", async () => {
       const strategy = createStrategyStub();
-      strategy.isAuthenticated.mockReturnValue(false);
+      strategy.isAuthenticated.mockResolvedValue(false);
       const processor = new AuthProcessor(strategy, fakeClient);
 
       await processor.authenticateIfNeeded();
@@ -170,11 +204,11 @@ describe("AuthProcessor", () => {
   });
 
   describe("clearAuth()", () => {
-    it("calls strategy.invalidate() exactly once", () => {
+    it("calls strategy.invalidate() exactly once", async () => {
       const strategy = createStrategyStub();
       const processor = new AuthProcessor(strategy, fakeClient);
 
-      processor.clearAuth();
+      await processor.clearAuth();
 
       expect(strategy.invalidate).toHaveBeenCalledTimes(1);
     });
@@ -184,8 +218,8 @@ describe("AuthProcessor", () => {
       // Model a strategy whose `invalidate()` flips `isAuthenticated()` to false,
       // mirroring the contract documented on AuthStrategy.invalidate.
       let authenticated = true;
-      strategy.isAuthenticated.mockImplementation(() => authenticated);
-      strategy.invalidate.mockImplementation(() => {
+      strategy.isAuthenticated.mockImplementation(async () => authenticated);
+      strategy.invalidate.mockImplementation(async () => {
         authenticated = false;
       });
       strategy.authenticate.mockImplementation(async () => {
@@ -198,15 +232,15 @@ describe("AuthProcessor", () => {
       expect(strategy.authenticate).not.toHaveBeenCalled();
 
       // Invalidate the session — strategy now reports unauthenticated.
-      processor.clearAuth();
+      await processor.clearAuth();
       expect(strategy.invalidate).toHaveBeenCalledTimes(1);
-      expect(processor.isAuthenticated()).toBe(false);
+      await expect(processor.isAuthenticated()).resolves.toBe(false);
 
       // Next pre-flight must trigger a fresh handshake forwarded with the client.
       await processor.authenticateIfNeeded();
       expect(strategy.authenticate).toHaveBeenCalledTimes(1);
       expect(strategy.authenticate).toHaveBeenCalledWith(fakeClient);
-      expect(processor.isAuthenticated()).toBe(true);
+      await expect(processor.isAuthenticated()).resolves.toBe(true);
     });
   });
 });
