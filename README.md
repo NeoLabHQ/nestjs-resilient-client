@@ -452,9 +452,9 @@ export class CatalogModule {}
 The `AuthStrategy` interface declares four methods that together own the full session lifecycle:
 
 - `authenticate(client: RestClient): Promise<void>` — performs the handshake; the `client` argument is a fully resilient `RestClient`, so auth requests reuse the same resilience policy stack as application calls.
-- `isAuthenticated(): boolean` — gates whether the next request needs to re-authenticate.
+- `isAuthenticated(): Promise<boolean>` — gates whether the next request needs to re-authenticate. 
 - `extendRequest(config: AxiosRequestConfig): AxiosRequestConfig` — applies the credentials to a request config (must not mutate the input).
-- `invalidate(): void` — drops the current session so the next request triggers a fresh handshake; called by `AuthRestClient` after a 401.
+- `invalidate(): Promise<void>` — drops the current session so the next request triggers a fresh handshake; called by `AuthRestClient` after a 401. 
 
 ```ts
 import {
@@ -489,7 +489,7 @@ class BearerTokenStrategy implements AuthStrategy {
     this.expiresAt = Date.now() + response.data.expires_in * 1_000 - 60_000
   }
 
-  isAuthenticated(): boolean {
+  async isAuthenticated(): Promise<boolean> {
     return this.token !== undefined && Date.now() < this.expiresAt
   }
 
@@ -500,7 +500,7 @@ class BearerTokenStrategy implements AuthStrategy {
     }
   }
 
-  invalidate(): void {
+  async invalidate(): Promise<void> {
     this.token = undefined
     this.expiresAt = 0
   }
@@ -654,10 +654,10 @@ new AuthProcessor(strategy: AuthStrategy, client: RestClient)
 
 Public methods:
 
-- `isAuthenticated(): boolean` — pure delegation to `strategy.isAuthenticated()`. The processor caches nothing; the strategy is the single source of truth.
-- `authenticateIfNeeded(): Promise<void>` — short-circuits when `isAuthenticated()` returns `true`; otherwise triggers a fresh `strategy.authenticate(client)` handshake. Concurrent callers share a single in-flight handshake (single-flight via `@DeduplicateInflight`).
+- `isAuthenticated(): Promise<boolean>` — awaited delegation to `strategy.isAuthenticated()`. The processor caches nothing; the strategy is the single source of truth.
+- `authenticateIfNeeded(): Promise<void>` — short-circuits when `await isAuthenticated()` resolves with `true`; otherwise triggers a fresh `strategy.authenticate(client)` handshake. Concurrent callers share a single in-flight handshake (single-flight via `@DeduplicateInflight`).
 - `extendRequest(config: AxiosRequestConfig): AxiosRequestConfig` — pure delegation to `strategy.extendRequest(config)`. The strategy contract forbids mutating the input.
-- `clearAuth(): void` — pure delegation to `strategy.invalidate()`. After this call, `isAuthenticated()` returns `false` and the next `authenticateIfNeeded()` triggers a fresh handshake. Used by `AuthRestClient`'s 401 retry path.
+- `clearAuth(): Promise<void>` — pure delegation to `strategy.invalidate()`, `await isAuthenticated()` resolves with `false` and the next `authenticateIfNeeded()` triggers a fresh handshake. Used by `AuthRestClient`'s 401 retry path.
 
 #### `AuthRestModule`
 
@@ -748,11 +748,13 @@ interface AuthStrategy {
   authenticate(client: RestClient): Promise<void>
 
   /**
-   * Returns `true` while the current credentials are still considered valid.
-   * Must return `false` when no session has been established yet or after
-   * `invalidate()` has been called.
+   * Resolves with `true` while the current credentials are still considered
+   * valid. Must resolve with `false` when no session has been established yet
+   * or after `invalidate()` has been called. Asynchronous so implementations
+   * can consult persisted credential stores or remote token-introspection
+   * endpoints without blocking the dispatch path on synchronous I/O.
    */
-  isAuthenticated(): boolean
+  isAuthenticated(): Promise<boolean>
 
   /**
    * Returns a NEW `AxiosRequestConfig` with authentication material applied.
@@ -762,10 +764,12 @@ interface AuthStrategy {
 
   /**
    * Drops the current session so the next request triggers a fresh
-   * `authenticate()` call. Invoked by `AuthRestClient` after the upstream
+   * `authenticate()` call. Resolves once the session has been dropped, so
+   * implementations may flush persisted credentials or await a remote
+   * sign-out endpoint. Invoked by `AuthRestClient` after the upstream
    * service rejects a request with HTTP 401.
    */
-  invalidate(): void
+  invalidate(): Promise<void>
 }
 ```
 

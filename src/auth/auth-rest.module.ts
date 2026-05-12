@@ -156,7 +156,7 @@ export const AUTH_MODULE_OPTIONS: unique symbol = Symbol('AUTH_MODULE_OPTIONS')
  *     this.expiresAt = Date.now() + response.data.expires_in * 1_000 - 60_000
  *   }
  *
- *   isAuthenticated(): boolean {
+ *   async isAuthenticated(): Promise<boolean> {
  *     return this.token !== undefined && Date.now() < this.expiresAt
  *   }
  *
@@ -167,7 +167,7 @@ export const AUTH_MODULE_OPTIONS: unique symbol = Symbol('AUTH_MODULE_OPTIONS')
  *     }
  *   }
  *
- *   invalidate(): void {
+ *   async invalidate(): Promise<void> {
  *     this.token = undefined
  *     this.expiresAt = 0
  *   }
@@ -245,11 +245,11 @@ export class AuthRestModule {
    * @Injectable()
    * class StaticBearerStrategy implements AuthStrategy {
    *   async authenticate() {}
-   *   isAuthenticated() { return true }
+   *   async isAuthenticated() { return true }
    *   extendRequest(config) {
    *     return { ...config, headers: { ...config.headers, Authorization: 'Bearer static' } }
    *   }
-   *   invalidate() {}
+   *   async invalidate() {}
    * }
    *
    * AuthRestModule.registerAsync({

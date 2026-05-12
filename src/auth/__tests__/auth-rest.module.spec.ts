@@ -68,9 +68,9 @@ class StrategyWithDeps implements AuthStrategy {
   constructor(@Inject(SENTINEL_TOKEN) public readonly sentinel: string) {}
 
   async authenticate(_client: RestClient): Promise<void> {}
-  isAuthenticated(): boolean { return true }
+  async isAuthenticated(): Promise<boolean> { return true }
   extendRequest(config: AxiosRequestConfig): AxiosRequestConfig { return config }
-  invalidate(): void {}
+  async invalidate(): Promise<void> {}
 }
 
 // Wraps the sentinel in its own NestJS module so it can be imported into
@@ -123,7 +123,7 @@ class StubAuthStrategy implements AuthStrategy {
     // no-op; the module spec does not exercise auth flows
   }
 
-  isAuthenticated(): boolean {
+  async isAuthenticated(): Promise<boolean> {
     return true
   }
 
@@ -131,7 +131,7 @@ class StubAuthStrategy implements AuthStrategy {
     return config
   }
 
-  invalidate(): void {
+  async invalidate(): Promise<void> {
     // no-op; the module spec does not exercise invalidation
   }
 }
@@ -147,7 +147,7 @@ class StubAuthStrategy implements AuthStrategy {
 class StampingAuthStrategy implements AuthStrategy {
   async authenticate(_client: RestClient): Promise<void> {}
 
-  isAuthenticated(): boolean {
+  async isAuthenticated(): Promise<boolean> {
     return true
   }
 
@@ -158,7 +158,7 @@ class StampingAuthStrategy implements AuthStrategy {
     }
   }
 
-  invalidate(): void {}
+  async invalidate(): Promise<void> {}
 }
 
 const successResponse: AxiosResponse = {

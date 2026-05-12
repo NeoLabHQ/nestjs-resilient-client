@@ -82,7 +82,7 @@ class CountingAuthStrategy implements AuthStrategy {
     this.authenticated = true
   }
 
-  isAuthenticated(): boolean {
+  async isAuthenticated(): Promise<boolean> {
     return this.authenticated
   }
 
@@ -96,7 +96,7 @@ class CountingAuthStrategy implements AuthStrategy {
     }
   }
 
-  invalidate(): void {
+  async invalidate(): Promise<void> {
     this.authenticated = false
   }
 }
@@ -113,7 +113,7 @@ class CountingAuthStrategy implements AuthStrategy {
 class StampingAuthStrategy implements AuthStrategy {
   async authenticate(_client: RestClient): Promise<void> {}
 
-  isAuthenticated(): boolean {
+  async isAuthenticated(): Promise<boolean> {
     return true
   }
 
@@ -127,7 +127,7 @@ class StampingAuthStrategy implements AuthStrategy {
     }
   }
 
-  invalidate(): void {}
+  async invalidate(): Promise<void> {}
 }
 
 /**

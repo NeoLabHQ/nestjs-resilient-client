@@ -68,7 +68,7 @@ function createRestClientStub(response: AxiosResponse = { data: 'ok' } as AxiosR
 interface AuthStrategyStub {
   authenticateIfNeeded: jest.Mock<Promise<void>, []>
   extendRequest: jest.Mock<AxiosRequestConfig, [AxiosRequestConfig]>
-  clearAuth: jest.Mock<void, []>
+  clearAuth: jest.Mock<Promise<void>, []>
 }
 
 /**
@@ -87,7 +87,7 @@ function createAuthStrategyStub(): AuthStrategyStub {
         },
       }),
     ),
-    clearAuth: jest.fn(),
+    clearAuth: jest.fn().mockResolvedValue(undefined),
   }
 }
 
@@ -215,6 +215,60 @@ describe('AuthRestClient', () => {
       expect(restClient.get).toHaveBeenCalledTimes(2)
       expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(2)
       expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+    })
+
+    it('awaits clearAuth before invoking authenticateIfNeeded on the 401 recovery path', async () => {
+      // Pins the awaited-ordering invariant on the 401 recovery branch:
+      // `AuthRestClient.dispatch` MUST `await processor.clearAuth()` BEFORE
+      // calling `authenticateIfNeeded` for the re-handshake. A regression that
+      // drops the `await` would still type-check (both return Promise<void>)
+      // and could pass call-count assertions because nothing else pins the
+      // resolution timing — so this test gates the ordering with a deferred
+      // Promise that only resolves when the test explicitly releases it.
+      const { client, restClient, authStrategy } = buildSut()
+
+      restClient.get
+        .mockRejectedValueOnce(makeAxiosError(401))
+        .mockResolvedValueOnce({ data: 'ok' } as AxiosResponse)
+
+      // Manually-resolved deferred so `clearAuth` stays pending until the
+      // test releases it. The pre-flight authenticateIfNeeded fires once
+      // BEFORE the 401, so we snapshot that baseline call count and assert
+      // the recovery handshake has not yet been triggered.
+      let resolveClearAuth!: () => void
+      const clearAuthDeferred = new Promise<void>((resolve) => {
+        resolveClearAuth = resolve
+      })
+      authStrategy.clearAuth.mockImplementationOnce(() => clearAuthDeferred)
+
+      const dispatchPromise = client.get('/x')
+
+      // Drain the microtask + macrotask queues so the dispatcher reaches
+      // `clearAuth` and suspends on the deferred. A `setImmediate` boundary
+      // is required because the pre-flight `authenticateIfNeeded` await, the
+      // first `restClient.get` rejection, and the error-branch `await` form
+      // a chain of microtasks that all need to flush before `clearAuth` is
+      // actually invoked.
+      await new Promise<void>(resolve => setImmediate(resolve))
+
+      // Pre-flight handshake ran once; recovery handshake MUST NOT have
+      // fired while `clearAuth` is still pending. A dropped `await` on
+      // `clearAuth` would have allowed authenticateIfNeeded to run already.
+      expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(1)
+
+      // Release the deferred — the dispatcher should now proceed to the
+      // recovery handshake and the second underlying RestClient call.
+      resolveClearAuth()
+
+      const response = await dispatchPromise
+
+      expect(response.data).toBe('ok')
+      // Recovery handshake fired exactly once AFTER clearAuth resolved,
+      // bringing the total authenticateIfNeeded invocations to two.
+      expect(authStrategy.authenticateIfNeeded).toHaveBeenCalledTimes(2)
+      expect(authStrategy.clearAuth).toHaveBeenCalledTimes(1)
+      expect(restClient.get).toHaveBeenCalledTimes(2)
     })
   })
 
