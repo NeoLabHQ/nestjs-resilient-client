@@ -7,7 +7,7 @@ import type {
 } from 'cockatiel'
 import type { Loggable } from 'nestjs-log-decorator'
 
-import { ResilencePresets } from '../resilence.policy'
+import { ResiliencePresets } from '../resilience.policy'
 import type { HttpVerb, InvokeArgs } from './base-http.service'
 import { HookableHttpService, type HooksConfig } from './hookable-http.service'
 import { resiliencePolicyBuilder } from './resailencePolicyBuilder'
@@ -78,7 +78,7 @@ function mergeSignal(
  * @example
  * ```ts
  * import { Module } from '@nestjs/common'
- * import { RestModule, RestClient, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestModule, RestClient, ResiliencePresets } from 'nestjs-resilient-client'
  *
  * // Inject RestClient via RestModule (recommended).
  * // RestModule.forRootAsync handles HttpModule registration and wiring.
@@ -87,7 +87,7 @@ function mergeSignal(
  *     RestModule.forRootAsync({
  *       useFactory: () => ({
  *         axios: { baseURL: 'https://api.example.com' },
- *         resilience: ResilencePresets.RESTFULL,
+ *         resilience: ResiliencePresets.RESTFULL,
  *       }),
  *     }),
  *   ],
@@ -96,7 +96,7 @@ function mergeSignal(
  *
  * // Or construct directly when you already have an HttpService.
  * // The response type parameter narrows `response.data` to `{ id: number; name: string }`.
- * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+ * const client = new RestClient(httpService, ResiliencePresets.CONSERVATIVE)
  * const response = await client.get<{ id: number; name: string }>('/products/42')
  * console.log(response.data.name) // 'Widget'
  * ```
@@ -117,9 +117,9 @@ export class RestClient extends HookableHttpService implements Loggable {
    * @example
    * ```ts
    * import { CircuitBreakerPolicy } from 'cockatiel'
-   * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
+   * import { RestClient, ResiliencePresets } from 'nestjs-resilient-client'
    *
-   * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+   * const client = new RestClient(httpService, ResiliencePresets.CONSERVATIVE)
    *
    * // Inspect the composed policy at runtime.
    * // CircuitBreakerPolicy exposes a `.state` getter for diagnostics.
@@ -134,7 +134,7 @@ export class RestClient extends HookableHttpService implements Loggable {
   /**
    * @param httpService Upstream `@nestjs/axios` HTTP transport.
    * @param config Resilience pipeline configuration. Defaults to
-   *   {@link ResilencePresets.CONSERVATIVE}. Both the cockatiel policy stack
+   *   {@link ResiliencePresets.CONSERVATIVE}. Both the cockatiel policy stack
    *   AND the RxJS pipeline (deduplication / rate-limiter / throttling) are
    *   derived from this object — the latter is built once via
    *   {@link buildRxjsPipeline} and forwarded to {@link HookableHttpService}'s
@@ -148,7 +148,7 @@ export class RestClient extends HookableHttpService implements Loggable {
    */
   constructor(
     httpService: HttpService,
-    config: ResilanceConfig<unknown> = ResilencePresets.CONSERVATIVE,
+    config: ResilanceConfig<unknown> = ResiliencePresets.CONSERVATIVE,
     hooks?: HooksConfig,
   ) {
     // Forward hooks AND the composed RxJS pipeline to HookableHttpService.

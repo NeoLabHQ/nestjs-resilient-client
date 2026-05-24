@@ -2,7 +2,7 @@ import { HttpModule, HttpService } from '@nestjs/axios'
 import { type DynamicModule, Module, type Type } from '@nestjs/common'
 import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 
-import { ResilencePresets } from '../resilence.policy'
+import { ResiliencePresets } from '../resilience.policy'
 import { RestClient } from '../client/rest.client'
 import { resolveResilience, type RestModuleOptions } from '../client/rest.module'
 import { AuthProcessor } from './auth-processor'
@@ -33,7 +33,7 @@ import type { AuthStrategy } from './auth.config'
  * - `axios?` — forwarded verbatim to the internally-registered `HttpModule`
  *   (`baseURL`, `timeout`, default headers, …).
  * - `resilience?` — override the CONSERVATIVE default. When omitted, the module
- *   falls back to `ResilencePresets.CONSERVATIVE` inside the
+ *   falls back to `ResiliencePresets.CONSERVATIVE` inside the
  *   {@link RestClient} provider factory.
  * - `hooks?` — `HookableHttpService` lifecycle hooks (`onInvoke` / `onReturn` /
  *   `onError`) forwarded verbatim to the constructed {@link RestClient}.
@@ -337,7 +337,7 @@ export class AuthRestModule {
             opts: AuthRestModuleOptions,
           ): RestClient => new RestClient(
             httpService,
-            resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE,
+            resolveResilience(opts) ?? ResiliencePresets.CONSERVATIVE,
             opts.hooks,
           ),
           inject: [HttpService, AUTH_MODULE_OPTIONS],

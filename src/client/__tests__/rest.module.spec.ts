@@ -5,7 +5,7 @@ import type { AxiosError, AxiosResponse } from 'axios'
 import { CircuitBreakerPolicy, RetryPolicy, TimeoutPolicy } from 'cockatiel'
 import { of, throwError } from 'rxjs'
 
-import { ResilencePresets } from '../../resilence.policy'
+import { ResiliencePresets } from '../../resilience.policy'
 import type { HooksConfig } from '../hookable-http.service'
 import type { ResilanceConfig } from '../resilance.config'
 import { RestClient } from '../rest.client'
@@ -470,8 +470,8 @@ describe('resolveResilience truth table', () => {
     // Other CONSERVATIVE fields MUST still be present (retry + circuitBreaker)
     // — the helper only tweaks `timeout`. If a future refactor accidentally
     // dropped the rest of the preset, this assertion catches it.
-    expect(result?.retry).toBe(ResilencePresets.CONSERVATIVE.retry)
-    expect(result?.circuitBreaker).toBe(ResilencePresets.CONSERVATIVE.circuitBreaker)
+    expect(result?.retry).toBe(ResiliencePresets.CONSERVATIVE.retry)
+    expect(result?.circuitBreaker).toBe(ResiliencePresets.CONSERVATIVE.circuitBreaker)
   })
 
   it('AC-2: axios.timeout > 0 AND resilience present → user resilience preserved unchanged', () => {

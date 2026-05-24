@@ -8,9 +8,9 @@ import { AuthRestClient } from '../auth/auth-rest.client'
 import { AuthProcessor } from '../auth/auth-processor'
 import { AuthRestModule } from '../auth/auth-rest.module'
 import {
-  ResilencePresets as DirectResilencePresets,
+  ResiliencePresets as DirectResiliencePresets,
   resiliencePolicyPresets as directResiliencePolicyPresets,
-} from '../resilence.policy'
+} from '../resilience.policy'
 
 // Type-only imports — re-imported from the BARREL (not the source modules) so
 // the smoke spec exercises the public surface end-to-end. If any of these type
@@ -118,23 +118,23 @@ describe('public surface (src/index.ts)', () => {
   })
 
   describe('resilience preset re-exports', () => {
-    it('exports the ResilencePresets const object whose values are usable ResilanceConfig payloads', () => {
-      // `ResilencePresets` is a `const` object plus a `type` of the same name
+    it('exports the ResiliencePresets const object whose values are usable ResilanceConfig payloads', () => {
+      // `ResiliencePresets` is a `const` object plus a `type` of the same name
       // (the union of preset config payloads). The runtime value carries the
       // three documented presets; consumers pass them directly to
-      // `new RestClient(http, ResilencePresets.X)` without a string lookup.
-      expect(publicSurface.ResilencePresets).toBe(DirectResilencePresets)
-      expect(publicSurface.ResilencePresets.CONSERVATIVE.retry).toBeDefined()
-      expect(publicSurface.ResilencePresets.RESTFULL.retry).toBeDefined()
-      expect(publicSurface.ResilencePresets.LOW_QUALITY.retry).toBeDefined()
+      // `new RestClient(http, ResiliencePresets.X)` without a string lookup.
+      expect(publicSurface.ResiliencePresets).toBe(DirectResiliencePresets)
+      expect(publicSurface.ResiliencePresets.CONSERVATIVE.retry).toBeDefined()
+      expect(publicSurface.ResiliencePresets.RESTFULL.retry).toBeDefined()
+      expect(publicSurface.ResiliencePresets.LOW_QUALITY.retry).toBeDefined()
     })
 
-    it('exports `resiliencePolicyPresets` as a backward-compatible identity alias of ResilencePresets', () => {
+    it('exports `resiliencePolicyPresets` as a backward-compatible identity alias of ResiliencePresets', () => {
       // Older consumer code references `resiliencePolicyPresets.X` directly;
       // the alias preserves that surface without duplicating the table. Strict
       // identity equality guards against drift between the two names.
       expect(publicSurface.resiliencePolicyPresets).toBe(directResiliencePolicyPresets)
-      expect(publicSurface.resiliencePolicyPresets).toBe(publicSurface.ResilencePresets)
+      expect(publicSurface.resiliencePolicyPresets).toBe(publicSurface.ResiliencePresets)
     })
   })
 

@@ -39,7 +39,7 @@ The verb surface (`request`, `get`, `delete`, `head`, `post`, `put`, `patch`, `p
 | `> 0`           | `undefined`       | `{ ...CONSERVATIVE, timeout: undefined }` (preset stripped) |
 | `> 0`           | defined           | `opts.resilience` unchanged (user override preserved)      |
 
-The "axios wins" case strips the CONSERVATIVE preset's per-attempt timeout from the merged config so the cockatiel pipeline does not also enforce a deadline — otherwise an axios `timeout: 5000` would be silently overridden by the preset's `60_000`. `axios.timeout = 0` is the documented "disabled" sentinel and does NOT trigger stripping. When the consumer explicitly passes `resilience`, it is honoured verbatim. The fallback to CONSERVATIVE happens at the call site (`resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE`) so explicit-undefined and omitted both yield the documented zero-config default. `forHttpService` skips `resolveResilience` because there is no axios.timeout to reconcile against in that delegation path.
+The "axios wins" case strips the CONSERVATIVE preset's per-attempt timeout from the merged config so the cockatiel pipeline does not also enforce a deadline — otherwise an axios `timeout: 5000` would be silently overridden by the preset's `60_000`. `axios.timeout = 0` is the documented "disabled" sentinel and does NOT trigger stripping. When the consumer explicitly passes `resilience`, it is honoured verbatim. The fallback to CONSERVATIVE happens at the call site (`resolveResilience(opts) ?? ResiliencePresets.CONSERVATIVE`) so explicit-undefined and omitted both yield the documented zero-config default. `forHttpService` skips `resolveResilience` because there is no axios.timeout to reconcile against in that delegation path.
 
 ### Resilience pipeline
 
@@ -51,7 +51,7 @@ Each sub-builder accepts a polymorphic config field and resolves it to a cockati
 
 ### Presets and retry semantics
 
-`resiliencePolicyPresets` (`src/resilence.policy.ts`) exposes `CONSERVATIVE` (default), `RESTFULL`, and `LOW_QUALITY`. Retry eligibility is delegated to `isRetryableError` (`src/shouldRetry.ts`):
+`resiliencePolicyPresets` (`src/resilience.policy.ts`) exposes `CONSERVATIVE` (default), `RESTFULL`, and `LOW_QUALITY`. Retry eligibility is delegated to `isRetryableError` (`src/shouldRetry.ts`):
 - Non-axios errors → retry (treated as parsing/internal).
 - Axios errors → retry only if the request method is in the configured allow-list (`SAFE_HTTP_METHODS = GET/HEAD/OPTIONS`; `RESTFULL` extends with PUT/DELETE) **and** the error is a network/internal/5xx error. A `CODE_EXCLUDE_LIST` blocks retry on cancellations and SSL/cert failures.
 

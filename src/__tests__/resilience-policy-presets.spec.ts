@@ -4,11 +4,11 @@ import {
   CONSERVATIVE_TIMEOUT_MS,
   LOW_QUALITY_TIMEOUT_MS,
   RESTFULL_TIMEOUT_MS,
-  ResilencePresets,
+  ResiliencePresets,
   defaultCircutBreaker,
   resiliencePolicyPresets,
   safeMethodsRetry,
-} from '../resilence.policy'
+} from '../resilience.policy'
 
 /**
  * Build a synthetic AxiosError that satisfies `axios.isAxiosError(...)`.
@@ -37,23 +37,23 @@ function makeAxiosError(method: string, status?: number): AxiosError {
 }
 
 describe('resilience policy presets', () => {
-  describe('ResilencePresets const object', () => {
+  describe('ResiliencePresets const object', () => {
     it('exposes exactly three presets keyed by the documented identifiers', () => {
-      // `ResilencePresets` is now a `const` object whose values are the full
+      // `ResiliencePresets` is now a `const` object whose values are the full
       // `ResilanceConfig` payloads (no string-key indirection). The keys
       // CONSERVATIVE / RESTFULL / LOW_QUALITY are the public contract
       // referenced by the README's "Configuration Strategies" section —
       // adding or renaming a preset requires a README change.
-      const keys = Object.keys(ResilencePresets).sort()
+      const keys = Object.keys(ResiliencePresets).sort()
       expect(keys).toEqual(['CONSERVATIVE', 'LOW_QUALITY', 'RESTFULL'])
     })
 
     it('every preset value is a usable `ResilanceConfig` (not a string identifier)', () => {
       // The whole point of the const-object reshape: a preset value can be
-      // passed directly to `new RestClient(http, ResilencePresets.X)` without
+      // passed directly to `new RestClient(http, ResiliencePresets.X)` without
       // an extra lookup. Smoke-test the shape so a future regression that
       // re-introduces string identifiers is caught at compile + runtime.
-      for (const preset of Object.values(ResilencePresets)) {
+      for (const preset of Object.values(ResiliencePresets)) {
         expect(preset.retry).toBeDefined()
         expect(preset.circuitBreaker).toBeDefined()
         expect(preset.timeout).toBeDefined()
@@ -106,8 +106,8 @@ describe('resilience policy presets', () => {
     })
   })
 
-  describe('ResilencePresets.CONSERVATIVE', () => {
-    const preset = ResilencePresets.CONSERVATIVE
+  describe('ResiliencePresets.CONSERVATIVE', () => {
+    const preset = ResiliencePresets.CONSERVATIVE
 
     it('shares the safeMethodsRetry retry config object', () => {
       // Identity equality matters — same object reference is the intent so
@@ -138,8 +138,8 @@ describe('resilience policy presets', () => {
     })
   })
 
-  describe('ResilencePresets.RESTFULL', () => {
-    const preset = ResilencePresets.RESTFULL
+  describe('ResiliencePresets.RESTFULL', () => {
+    const preset = ResiliencePresets.RESTFULL
 
     it('preserves maxAttempts=3 from safeMethodsRetry', () => {
       expect(preset.retry?.maxAttempts).toBe(3)
@@ -203,8 +203,8 @@ describe('resilience policy presets', () => {
     })
   })
 
-  describe('ResilencePresets.LOW_QUALITY', () => {
-    const preset = ResilencePresets.LOW_QUALITY
+  describe('ResiliencePresets.LOW_QUALITY', () => {
+    const preset = ResiliencePresets.LOW_QUALITY
 
     it('reuses the same safeMethodsRetry config as CONSERVATIVE', () => {
       // README documents LOW_QUALITY as "same retry surface as CONSERVATIVE"
@@ -226,18 +226,18 @@ describe('resilience policy presets', () => {
   })
 
   describe('resiliencePolicyPresets backward-compatible alias', () => {
-    it('points to the same const object as ResilencePresets (identity alias)', () => {
+    it('points to the same const object as ResiliencePresets (identity alias)', () => {
       // `resiliencePolicyPresets` is retained as a deprecated re-export so
       // older consumer code (referencing the historical lookup-table name)
       // keeps compiling. Identity equality is the contract — drift here means
       // we accidentally created a duplicate object rather than aliasing.
-      expect(resiliencePolicyPresets).toBe(ResilencePresets)
+      expect(resiliencePolicyPresets).toBe(ResiliencePresets)
     })
 
     it('exposes every preset directly as a usable ResilanceConfig', () => {
       // No string-key indirection — `resiliencePolicyPresets.CONSERVATIVE`
       // returns the config payload directly. This is the new ergonomics that
-      // replace the historical `resiliencePolicyPresets[ResilencePresets.X]`
+      // replace the historical `resiliencePolicyPresets[ResiliencePresets.X]`
       // double-lookup form documented in earlier README revisions.
       for (const preset of Object.values(resiliencePolicyPresets)) {
         expect(preset.retry).toBeDefined()

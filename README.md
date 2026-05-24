@@ -117,7 +117,7 @@ Proactive policies engage *before* a failure to manage load.
 For requests that do not require authentication, `RestModule.registerAsync` is the shortest path to a fully resilient `RestClient`. It internally registers `HttpModule` with the supplied axios configuration (`baseURL`, `timeout`, default headers, …) and wires the `RestClient` provider for you. When `resilience` is omitted, the `CONSERVATIVE` preset is applied.
 
 ```ts
-import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
 
 @Module({
   imports: [
@@ -128,7 +128,7 @@ import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
           baseURL: 'https://api.example.com',
         },
         // Optional. Default is CONSERVATIVE preset.
-        resilience: ResilencePresets.RESTFULL,
+        resilience: ResiliencePresets.RESTFULL,
       }),
     }),
   ],
@@ -628,7 +628,7 @@ new RestClient(httpService: HttpService, config?: ResilanceConfig<unknown>, hook
 ```
 
 - `httpService` — the upstream `@nestjs/axios` `HttpService`.
-- `config` — optional resilience configuration; defaults to `ResilencePresets.CONSERVATIVE`.
+- `config` — optional resilience configuration; defaults to `ResiliencePresets.CONSERVATIVE`.
 - `hooks` — optional `HooksConfig` lifecycle (`onInvoke` / `onReturn` / `onError`) forwarded to `HookableHttpService`.
 
 Public methods mirror `HttpService`:

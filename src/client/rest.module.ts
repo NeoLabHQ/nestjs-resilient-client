@@ -4,7 +4,7 @@ import { type DynamicModule, Module } from '@nestjs/common'
 import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 import axios from 'axios'
 
-import { ResilencePresets } from '../resilence.policy'
+import { ResiliencePresets } from '../resilience.policy'
 import type { HooksConfig } from './hookable-http.service'
 import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
@@ -20,7 +20,7 @@ import { RestClient } from './rest.client'
  * ```ts
  * import { HttpModule, HttpService } from '@nestjs/axios'
  * import { Module } from '@nestjs/common'
- * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
  *
  * @Module({
  *   imports: [
@@ -30,7 +30,7 @@ import { RestClient } from './rest.client'
  *       inject: [HttpService],
  *       useFactory: (httpService: HttpService) => ({
  *         httpService,
- *         resilience: ResilencePresets.RESTFULL,
+ *         resilience: ResiliencePresets.RESTFULL,
  *       }),
  *     }),
  *   ],
@@ -68,7 +68,7 @@ export interface RestFromHttpServiceOptions {
  * @example
  * ```ts
  * import { ConfigModule, ConfigService } from '@nestjs/config'
- * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
  * import type { RestModuleOptions } from 'nestjs-resilient-client'
  *
  * RestModule.forRootAsync({
@@ -79,7 +79,7 @@ export interface RestFromHttpServiceOptions {
  *       baseURL: config.get('API_BASE_URL'),
  *       timeout: 5_000,
  *     },
- *     resilience: ResilencePresets.RESTFULL,
+ *     resilience: ResiliencePresets.RESTFULL,
  *   }),
  * })
  * ```
@@ -196,7 +196,7 @@ export function resolveResilience(
   // `resiliencePolicyBuilder` checks `config.timeout !== undefined` before
   // attaching a `TimeoutPolicy`.
   if (opts.resilience === undefined) {
-    return { ...ResilencePresets.CONSERVATIVE, timeout: undefined }
+    return { ...ResiliencePresets.CONSERVATIVE, timeout: undefined }
   }
 
   // axios.timeout > 0 with user resilience: user opinion is preserved.
@@ -301,7 +301,7 @@ export class RestModule {
    * ```ts
    * import { HttpModule, HttpService } from '@nestjs/axios'
    * import { Module } from '@nestjs/common'
-   * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+   * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [
@@ -311,7 +311,7 @@ export class RestModule {
    *       inject: [HttpService],
    *       useFactory: (httpService: HttpService) => ({
    *         httpService,
-   *         resilience: ResilencePresets.RESTFULL,
+   *         resilience: ResiliencePresets.RESTFULL,
    *       }),
    *     }),
    *   ],
@@ -377,7 +377,7 @@ export class RestModule {
    * ```ts
    * import { Module, Injectable } from '@nestjs/common'
    * import { ConfigModule, ConfigService } from '@nestjs/config'
-   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-resilient-client'
+   * import { RestModule, RestClient, ResiliencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [
@@ -386,7 +386,7 @@ export class RestModule {
    *       inject: [ConfigService],
    *       useFactory: (config: ConfigService) => ({
    *         axios: { baseURL: config.get('API_BASE_URL') },
-   *         resilience: ResilencePresets.CONSERVATIVE,
+   *         resilience: ResiliencePresets.CONSERVATIVE,
    *       }),
    *     }),
    *   ],
@@ -493,7 +493,7 @@ export class RestModule {
             opts: RestModuleOptions,
           ): RestClient => new RestClient(
             httpService,
-            resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE,
+            resolveResilience(opts) ?? ResiliencePresets.CONSERVATIVE,
             opts.hooks,
           ),
           inject: [HttpService, REST_MODULE_OPTIONS],

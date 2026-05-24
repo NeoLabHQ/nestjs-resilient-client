@@ -11,7 +11,7 @@ import type { AxiosError, AxiosResponse } from 'axios'
 
 import { RestClient } from '../rest.client'
 import { resiliencePolicyBuilder } from '../resailencePolicyBuilder'
-import { ResilencePresets } from '../../resilence.policy'
+import { ResiliencePresets } from '../../resilience.policy'
 import type { ResilanceConfig } from '../resilance.config'
 import type { HooksConfig } from '../hookable-http.service'
 
@@ -613,13 +613,13 @@ describe('RestClient', () => {
   })
 
   describe('constructor', () => {
-    it('explicit `config = ResilencePresets.CONSERVATIVE` produces same policy shape as the default', () => {
+    it('explicit `config = ResiliencePresets.CONSERVATIVE` produces same policy shape as the default', () => {
       const stubHttp = buildHttpServiceStub(successResponse)
 
       const defaulted = new RestClient(stubHttp as unknown as ConstructorParameters<typeof RestClient>[0])
       const explicit = new RestClient(
         stubHttp as unknown as ConstructorParameters<typeof RestClient>[0],
-        ResilencePresets.CONSERVATIVE,
+        ResiliencePresets.CONSERVATIVE,
       )
 
       const defaultedWrapped = (defaulted.policy as unknown as { wrapped: object[] }).wrapped

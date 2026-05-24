@@ -9,7 +9,7 @@ import { ConstantBackoff, isTaskCancelledError } from 'cockatiel'
 import {
   RestClient,
   RestModule,
-  ResilencePresets,
+  ResiliencePresets,
   type ResilanceConfig,
 } from '../src/index'
 
@@ -61,7 +61,7 @@ describe('RestClient (e2e)', () => {
    * because the assertion is on retry COUNT, not on inter-attempt timing.
    */
   function buildClientWithFastBackoff(): RestClient {
-    const conservative = ResilencePresets.CONSERVATIVE
+    const conservative = ResiliencePresets.CONSERVATIVE
     // The preset's `retry` field is non-optional in CONSERVATIVE, but the
     // type system models it as optional. Guard explicitly so a future
     // preset edit cannot silently drop retries from this test.
