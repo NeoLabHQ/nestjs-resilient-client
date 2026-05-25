@@ -1,13 +1,70 @@
 import { HttpModule, HttpService } from '@nestjs/axios'
 import type { HttpModuleOptions } from '@nestjs/axios'
-import { type DynamicModule, Module } from '@nestjs/common'
-import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
+import { type DynamicModule, Module, type Type } from '@nestjs/common'
+import type { Abstract, InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 import axios from 'axios'
 
 import { ResiliencePresets } from '../resilience.policy'
 import type { HooksConfig } from './hookable-http.service'
 import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
+
+/**
+ * Union of every shape NestJS DI accepts as an element of a factory provider's
+ * `inject` array. Mirrors the runtime type that `@nestjs/common`'s
+ * `FactoryProvider.inject` carries, but kept as a local alias so the helper
+ * types below can be expressed without re-importing the union at every call
+ * site.
+ *
+ * See {@link InjectionToken} and {@link OptionalFactoryDependency} for the
+ * upstream definitions.
+ */
+export type FactoryInjectToken = InjectionToken | OptionalFactoryDependency
+
+/**
+ * Resolves a single {@link FactoryInjectToken} element to the type the NestJS
+ * DI container will hand to the factory at that position.
+ *
+ * Resolution rules (matching the runtime behaviour of NestJS DI):
+ *
+ * - `Type<U>` (class constructor) → `U` — the resolved class instance.
+ * - `Abstract<U>` (abstract class) → `U` — the resolved abstract-class subtype.
+ * - `{ token: InjectionToken<U>; optional: boolean }` → `U | undefined` — an
+ *   optional dependency may legitimately resolve to `undefined`.
+ * - Anything else (bare `string` / `symbol` / `Function` injection tokens) →
+ *   `unknown`. These erase to `unknown` rather than `any` so consumers cannot
+ *   accidentally smuggle untyped values through the factory boundary; if
+ *   precise typing is required, callers can supply a manual parameter
+ *   annotation on `useFactory` to widen / narrow as needed.
+ *
+ * @template T - A single element of an `inject` tuple.
+ */
+export type ResolveInjectedDep<T>
+  = T extends Type<infer U>
+    ? U
+    : T extends Abstract<infer U>
+      ? U
+      : T extends { token: InjectionToken<infer U>, optional: boolean }
+        ? U | undefined
+        : unknown
+
+/**
+ * Maps an `inject` tuple to the parameter tuple the NestJS DI container will
+ * spread into the factory function. Preserves element order — position 0 in
+ * the `inject` array maps to parameter 0 in `useFactory`, and so on.
+ *
+ * Used to type the variadic parameters of {@link RestModule.registerAsync}'s
+ * (and friends') `useFactory` so consumers writing
+ * `inject: [ConfigService], useFactory: (config) => ...` get `config` typed
+ * as `ConfigService` without a manual annotation.
+ *
+ * @template TInject - The `inject` tuple type (typically inferred via the
+ *   `const` modifier on the surrounding generic so the elements are kept as
+ *   exact class references rather than widened to `Type<unknown>`).
+ */
+export type ResolveInjectedDeps<TInject extends readonly FactoryInjectToken[]> = {
+  [K in keyof TInject]: ResolveInjectedDep<TInject[K]>
+}
 
 /**
  * Minimal options for {@link RestModule.fromHttpService} — the caller supplies a
@@ -319,19 +376,34 @@ export class RestModule {
    * export class CatalogModule {}
    * ```
    */
-  static fromHttpService(options: {
+  static fromHttpService<
+    const TInject extends readonly FactoryInjectToken[] = readonly [],
+  >(options: {
     useFactory: (
-      ...args: unknown[]
+      ...args: ResolveInjectedDeps<TInject>
     ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
-    inject?: unknown[]
+    inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
+    // Internal forwarding to NestJS DI still uses the wider runtime type —
+    // the generic only narrows the consumer-facing surface. Casting back at
+    // the boundary keeps the public type tuple-precise while letting the
+    // private wiring stay structurally identical to the pre-generic shape.
     const inject = (options.inject ?? []) as Array<
       InjectionToken | OptionalFactoryDependency
     >
     const userImports = (options.imports ?? []) as NonNullable<
       DynamicModule['imports']
     >
+
+    // Cast through the wider runtime signature so the internal call sites,
+    // which receive the DI-resolved values as `unknown[]`, can invoke the
+    // consumer's narrowly-typed factory without each call site needing its
+    // own per-position cast. This is a purely structural cast — the runtime
+    // arity / order is identical.
+    const useFactory = options.useFactory as (
+      ...args: unknown[]
+    ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
 
     return {
       module: RestModule,
@@ -340,7 +412,7 @@ export class RestModule {
         {
           provide: RestClient,
           useFactory: async (...args: unknown[]): Promise<RestClient> => {
-            const { httpService, resilience, hooks } = await options.useFactory(...args)
+            const { httpService, resilience, hooks } = await useFactory(...args)
             // `fromHttpService` receives an explicit `httpService` and trusts
             // the caller's resilience verbatim (no `resolveResilience` here —
             // there is no `axios.timeout` to reconcile against, since axios
@@ -405,19 +477,32 @@ export class RestModule {
    * }
    * ```
    */
-  static registerAsync(options: {
+  static registerAsync<
+    const TInject extends readonly FactoryInjectToken[] = readonly [],
+  >(options: {
     useFactory: (
-      ...args: unknown[]
+      ...args: ResolveInjectedDeps<TInject>
     ) => Promise<RestModuleOptions> | RestModuleOptions
-    inject?: unknown[]
+    inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
+    // Internal forwarding to NestJS DI still uses the wider runtime type —
+    // the generic only narrows the consumer-facing surface. Casting back at
+    // the boundary keeps the public type tuple-precise while letting the
+    // private wiring stay structurally identical to the pre-generic shape.
     const inject = (options.inject ?? []) as Array<
       InjectionToken | OptionalFactoryDependency
     >
     const userImports = (options.imports ?? []) as NonNullable<
       DynamicModule['imports']
     >
+    // Cast through the wider runtime signature so the internal call sites,
+    // which receive the DI-resolved values as `unknown[]`, can invoke the
+    // consumer's narrowly-typed factory without each call site needing its
+    // own per-position cast. Runtime arity / order is identical.
+    const useFactory = options.useFactory as (
+      ...args: unknown[]
+    ) => Promise<RestModuleOptions> | RestModuleOptions
 
     return {
       module: RestModule,
@@ -430,7 +515,7 @@ export class RestModule {
           imports: userImports,
           inject,
           useFactory: async (...args: unknown[]) => {
-            const opts = await options.useFactory(...args)
+            const opts = await useFactory(...args)
             return opts.axios ?? {}
           },
         }),
@@ -445,7 +530,7 @@ export class RestModule {
         //    referentially transparent (NestJS docs require it).
         {
           provide: REST_MODULE_OPTIONS,
-          useFactory: options.useFactory,
+          useFactory,
           inject,
         },
         // 2. HttpService re-binding. CRITICAL: the class-level `@Module({...})`

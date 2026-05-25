@@ -37,6 +37,9 @@ export type {
 
 // Type-only exports — module options surface (for advanced consumers and test fixtures)
 export type {
+  FactoryInjectToken,
+  ResolveInjectedDep,
+  ResolveInjectedDeps,
   RestModuleOptions,
   RestFromHttpServiceOptions,
 } from './client/rest.module'

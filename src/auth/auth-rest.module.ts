@@ -4,7 +4,12 @@ import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/i
 
 import { ResiliencePresets } from '../resilience.policy'
 import { RestClient } from '../client/rest.client'
-import { resolveResilience, type RestModuleOptions } from '../client/rest.module'
+import {
+  type FactoryInjectToken,
+  type ResolveInjectedDeps,
+  resolveResilience,
+  type RestModuleOptions,
+} from '../client/rest.module'
 import { AuthProcessor } from './auth-processor'
 import { AuthRestClient } from './auth-rest.client'
 import type { AuthStrategy } from './auth.config'
@@ -259,18 +264,29 @@ export class AuthRestModule {
    * })
    * ```
    */
-  static registerAsync(options: {
+  static registerAsync<
+    const TInject extends readonly FactoryInjectToken[] = readonly [],
+  >(options: {
     strategy: Type<AuthStrategy>
     useFactory: (
-      ...args: unknown[]
+      ...args: ResolveInjectedDeps<TInject>
     ) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
-    inject?: unknown[]
+    inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
+    // Internal forwarding to NestJS DI still uses the wider runtime type —
+    // the generic only narrows the consumer-facing surface. Casting back at
+    // the boundary keeps the public type tuple-precise while letting the
+    // private wiring stay structurally identical to the pre-generic shape.
     const inject = (options.inject ?? []) as Array<
       InjectionToken | OptionalFactoryDependency
     >
     const userImports = (options.imports ?? []) as NonNullable<DynamicModule['imports']>
+    // Cast to the wider runtime factory signature so internal call sites can
+    // invoke the consumer's narrowly-typed factory uniformly.
+    const useFactory = options.useFactory as (
+      ...args: unknown[]
+    ) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
 
     return {
       module: AuthRestModule,
@@ -301,7 +317,7 @@ export class AuthRestModule {
           imports: userImports,
           inject,
           useFactory: async (...args: unknown[]) => {
-            const opts = await options.useFactory(...args)
+            const opts = await useFactory(...args)
             return opts.axios ?? {}
           },
         }),
@@ -313,7 +329,7 @@ export class AuthRestModule {
         //    consumed by the AuthRestClient provider to forward `opts.hooks`.
         {
           provide: AUTH_MODULE_OPTIONS,
-          useFactory: options.useFactory,
+          useFactory,
           inject,
         },
         // 2. RestClient — built from the `HttpService` produced by the
