@@ -1,12 +1,14 @@
 import { HttpModule, HttpService } from '@nestjs/axios'
 import { type DynamicModule, Module, type Type } from '@nestjs/common'
-import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 
+import {
+  type FactoryInjectToken,
+  resolveFactoryOptions,
+  type ResolveInjectedDeps,
+} from '../dynamic-module'
 import { ResiliencePresets } from '../resilience.policy'
 import { RestClient } from '../client/rest.client'
 import {
-  type FactoryInjectToken,
-  type ResolveInjectedDeps,
   resolveResilience,
   type RestModuleOptions,
 } from '../client/rest.module'
@@ -274,19 +276,10 @@ export class AuthRestModule {
     inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
-    // Internal forwarding to NestJS DI still uses the wider runtime type —
-    // the generic only narrows the consumer-facing surface. Casting back at
-    // the boundary keeps the public type tuple-precise while letting the
-    // private wiring stay structurally identical to the pre-generic shape.
-    const inject = (options.inject ?? []) as Array<
-      InjectionToken | OptionalFactoryDependency
-    >
-    const userImports = (options.imports ?? []) as NonNullable<DynamicModule['imports']>
-    // Cast to the wider runtime factory signature so internal call sites can
-    // invoke the consumer's narrowly-typed factory uniformly.
-    const useFactory = options.useFactory as (
-      ...args: unknown[]
-    ) => Promise<AuthRestModuleOptions> | AuthRestModuleOptions
+    const { inject, userImports, useFactory } = resolveFactoryOptions<
+      TInject,
+      AuthRestModuleOptions
+    >(options)
 
     return {
       module: AuthRestModule,

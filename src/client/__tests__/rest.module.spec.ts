@@ -10,15 +10,13 @@ import { ResiliencePresets } from '../../resilience.policy'
 import type { HooksConfig } from '../hookable-http.service'
 import type { ResilanceConfig } from '../resilance.config'
 import { RestClient } from '../rest.client'
+import type { ResolveInjectedDeps } from '../../dynamic-module'
 import {
   REST_MODULE_OPTIONS,
   RestModule,
   resolveResilience,
 } from '../rest.module'
-import type {
-  ResolveInjectedDeps,
-  RestFromHttpServiceOptions,
-} from '../rest.module'
+import type { RestFromHttpServiceOptions } from '../rest.module'
 
 /**
  * Builds an axios-shaped error fixture matching the structure
