@@ -40,37 +40,37 @@ export const LOW_QUALITY_TIMEOUT_MS = 180_000;
  * `RestModule.forRootAsync` without an extra lookup step.
  *
  * The `as const` annotation preserves the literal types of the inner config
- * objects so the {@link ResilencePresets} type alias produces a narrowed
+ * objects so the {@link ResiliencePresets} type alias produces a narrowed
  * `ResilanceConfig<...>` union (rather than the widened `ResilanceConfig`
  * surface that a plain `Record` lookup would return).
  *
  * Consumers building configuration tables keyed by preset *name* can read
- * `Object.keys(ResilencePresets)` — the keys are stable identifiers documented
+ * `Object.keys(ResiliencePresets)` — the keys are stable identifiers documented
  * in the README's "Configuration Strategies" section.
  *
  * @example
  * ```ts
- * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestClient, ResiliencePresets } from 'nestjs-resilient-client'
  *
  * // Use CONSERVATIVE preset (default — safe methods only, 60 s per-attempt timeout)
- * const conservative = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+ * const conservative = new RestClient(httpService, ResiliencePresets.CONSERVATIVE)
  *
  * // Use RESTFULL preset (includes PUT/DELETE retries, 10 s timeout)
- * const restfull = new RestClient(httpService, ResilencePresets.RESTFULL)
+ * const restfull = new RestClient(httpService, ResiliencePresets.RESTFULL)
  *
  * // Use LOW_QUALITY preset (safe methods only, 3 min per-attempt timeout)
- * const lowQuality = new RestClient(httpService, ResilencePresets.LOW_QUALITY)
+ * const lowQuality = new RestClient(httpService, ResiliencePresets.LOW_QUALITY)
  *
  * // Pass a preset to RestModule.forRootAsync
  * RestModule.forRootAsync({
  *   useFactory: () => ({
  *     axios: { baseURL: 'https://api.example.com' },
- *     resilience: ResilencePresets.RESTFULL,
+ *     resilience: ResiliencePresets.RESTFULL,
  *   }),
  * })
  * ```
  */
-export const ResilencePresets = {
+export const ResiliencePresets = {
     /**
      * Default preset. Retries `GET`, `HEAD`, and `OPTIONS` up to 3 times on 5xx
      * and network errors with exponential backoff. `PUT`, `DELETE`, `PATCH`, and
@@ -79,9 +79,9 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
+     * import { RestClient, ResiliencePresets } from 'nestjs-resilient-client'
      *
-     * const client = new RestClient(httpService, ResilencePresets.CONSERVATIVE)
+     * const client = new RestClient(httpService, ResiliencePresets.CONSERVATIVE)
      * const response = await client.get('/health')
      * console.log(response.status) // 200
      * ```
@@ -99,9 +99,9 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
+     * import { RestClient, ResiliencePresets } from 'nestjs-resilient-client'
      *
-     * const client = new RestClient(httpService, ResilencePresets.RESTFULL)
+     * const client = new RestClient(httpService, ResiliencePresets.RESTFULL)
      * const response = await client.put('/resources/42', { name: 'updated' })
      * console.log(response.status) // 200 (retried on transient 503)
      * ```
@@ -122,9 +122,9 @@ export const ResilencePresets = {
      *
      * @example
      * ```ts
-     * import { RestClient, ResilencePresets } from 'nestjs-resilient-client'
+     * import { RestClient, ResiliencePresets } from 'nestjs-resilient-client'
      *
-     * const client = new RestClient(httpService, ResilencePresets.LOW_QUALITY)
+     * const client = new RestClient(httpService, ResiliencePresets.LOW_QUALITY)
      * // Long-running safe request; retried up to 3 times with up to 3 min per attempt.
      * const response = await client.get('/slow-report')
      * console.log(response.status) // 200
@@ -144,23 +144,23 @@ export const ResilencePresets = {
  *
  * The TypeScript pattern of declaring a `const` value and a `type` alias under
  * the same identifier is intentional — it preserves the original ergonomics
- * (`function foo(p: ResilencePresets)` and `ResilencePresets.CONSERVATIVE`)
+ * (`function foo(p: ResiliencePresets)` and `ResiliencePresets.CONSERVATIVE`)
  * while letting the runtime value be the configuration table itself.
  */
-export type ResilencePresets =
-    typeof ResilencePresets[keyof typeof ResilencePresets];
+export type ResiliencePresets =
+    typeof ResiliencePresets[keyof typeof ResiliencePresets];
 
 /**
- * Backward-compatible alias of {@link ResilencePresets}. Older consumer code
+ * Backward-compatible alias of {@link ResiliencePresets}. Older consumer code
  * may still reference `resiliencePolicyPresets.CONSERVATIVE` — the alias keeps
- * those call sites working without the `[ResilencePresets.X]` lookup, since
- * the new `ResilencePresets` object IS the lookup table.
+ * those call sites working without the `[ResiliencePresets.X]` lookup, since
+ * the new `ResiliencePresets` object IS the lookup table.
  *
- * New code should prefer {@link ResilencePresets} directly.
+ * New code should prefer {@link ResiliencePresets} directly.
  *
- * @deprecated Use {@link ResilencePresets} directly — the const object's
+ * @deprecated Use {@link ResiliencePresets} directly — the const object's
  *   values are the {@link ResilanceConfig} payloads, so the old
- *   `resiliencePolicyPresets[ResilencePresets.CONSERVATIVE]` indirection is no
+ *   `resiliencePolicyPresets[ResiliencePresets.CONSERVATIVE]` indirection is no
  *   longer required.
  */
-export const resiliencePolicyPresets = ResilencePresets;
+export const resiliencePolicyPresets = ResiliencePresets;

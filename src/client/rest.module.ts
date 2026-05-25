@@ -1,10 +1,14 @@
 import { HttpModule, HttpService } from '@nestjs/axios'
 import type { HttpModuleOptions } from '@nestjs/axios'
 import { type DynamicModule, Module } from '@nestjs/common'
-import type { InjectionToken, OptionalFactoryDependency } from '@nestjs/common/interfaces'
 import axios from 'axios'
 
-import { ResilencePresets } from '../resilence.policy'
+import {
+  type FactoryInjectToken,
+  resolveFactoryOptions,
+  type ResolveInjectedDeps,
+} from '../dynamic-module'
+import { ResiliencePresets } from '../resilience.policy'
 import type { HooksConfig } from './hookable-http.service'
 import type { ResilanceConfig } from './resilance.config'
 import { RestClient } from './rest.client'
@@ -20,7 +24,7 @@ import { RestClient } from './rest.client'
  * ```ts
  * import { HttpModule, HttpService } from '@nestjs/axios'
  * import { Module } from '@nestjs/common'
- * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
  *
  * @Module({
  *   imports: [
@@ -30,7 +34,7 @@ import { RestClient } from './rest.client'
  *       inject: [HttpService],
  *       useFactory: (httpService: HttpService) => ({
  *         httpService,
- *         resilience: ResilencePresets.RESTFULL,
+ *         resilience: ResiliencePresets.RESTFULL,
  *       }),
  *     }),
  *   ],
@@ -68,7 +72,7 @@ export interface RestFromHttpServiceOptions {
  * @example
  * ```ts
  * import { ConfigModule, ConfigService } from '@nestjs/config'
- * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+ * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
  * import type { RestModuleOptions } from 'nestjs-resilient-client'
  *
  * RestModule.forRootAsync({
@@ -79,7 +83,7 @@ export interface RestFromHttpServiceOptions {
  *       baseURL: config.get('API_BASE_URL'),
  *       timeout: 5_000,
  *     },
- *     resilience: ResilencePresets.RESTFULL,
+ *     resilience: ResiliencePresets.RESTFULL,
  *   }),
  * })
  * ```
@@ -196,7 +200,7 @@ export function resolveResilience(
   // `resiliencePolicyBuilder` checks `config.timeout !== undefined` before
   // attaching a `TimeoutPolicy`.
   if (opts.resilience === undefined) {
-    return { ...ResilencePresets.CONSERVATIVE, timeout: undefined }
+    return { ...ResiliencePresets.CONSERVATIVE, timeout: undefined }
   }
 
   // axios.timeout > 0 with user resilience: user opinion is preserved.
@@ -301,7 +305,7 @@ export class RestModule {
    * ```ts
    * import { HttpModule, HttpService } from '@nestjs/axios'
    * import { Module } from '@nestjs/common'
-   * import { RestModule, ResilencePresets } from 'nestjs-resilient-client'
+   * import { RestModule, ResiliencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [
@@ -311,7 +315,7 @@ export class RestModule {
    *       inject: [HttpService],
    *       useFactory: (httpService: HttpService) => ({
    *         httpService,
-   *         resilience: ResilencePresets.RESTFULL,
+   *         resilience: ResiliencePresets.RESTFULL,
    *       }),
    *     }),
    *   ],
@@ -319,19 +323,19 @@ export class RestModule {
    * export class CatalogModule {}
    * ```
    */
-  static fromHttpService(options: {
+  static fromHttpService<
+    const TInject extends readonly FactoryInjectToken[] = readonly [],
+  >(options: {
     useFactory: (
-      ...args: unknown[]
+      ...args: ResolveInjectedDeps<TInject>
     ) => Promise<RestFromHttpServiceOptions> | RestFromHttpServiceOptions
-    inject?: unknown[]
+    inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
-    const inject = (options.inject ?? []) as Array<
-      InjectionToken | OptionalFactoryDependency
-    >
-    const userImports = (options.imports ?? []) as NonNullable<
-      DynamicModule['imports']
-    >
+    const { inject, userImports, useFactory } = resolveFactoryOptions<
+      TInject,
+      RestFromHttpServiceOptions
+    >(options)
 
     return {
       module: RestModule,
@@ -340,7 +344,7 @@ export class RestModule {
         {
           provide: RestClient,
           useFactory: async (...args: unknown[]): Promise<RestClient> => {
-            const { httpService, resilience, hooks } = await options.useFactory(...args)
+            const { httpService, resilience, hooks } = await useFactory(...args)
             // `fromHttpService` receives an explicit `httpService` and trusts
             // the caller's resilience verbatim (no `resolveResilience` here —
             // there is no `axios.timeout` to reconcile against, since axios
@@ -377,7 +381,7 @@ export class RestModule {
    * ```ts
    * import { Module, Injectable } from '@nestjs/common'
    * import { ConfigModule, ConfigService } from '@nestjs/config'
-   * import { RestModule, RestClient, ResilencePresets } from 'nestjs-resilient-client'
+   * import { RestModule, RestClient, ResiliencePresets } from 'nestjs-resilient-client'
    *
    * @Module({
    *   imports: [
@@ -386,7 +390,7 @@ export class RestModule {
    *       inject: [ConfigService],
    *       useFactory: (config: ConfigService) => ({
    *         axios: { baseURL: config.get('API_BASE_URL') },
-   *         resilience: ResilencePresets.CONSERVATIVE,
+   *         resilience: ResiliencePresets.CONSERVATIVE,
    *       }),
    *     }),
    *   ],
@@ -405,19 +409,19 @@ export class RestModule {
    * }
    * ```
    */
-  static registerAsync(options: {
+  static registerAsync<
+    const TInject extends readonly FactoryInjectToken[] = readonly [],
+  >(options: {
     useFactory: (
-      ...args: unknown[]
+      ...args: ResolveInjectedDeps<TInject>
     ) => Promise<RestModuleOptions> | RestModuleOptions
-    inject?: unknown[]
+    inject?: TInject
     imports?: unknown[]
   }): DynamicModule {
-    const inject = (options.inject ?? []) as Array<
-      InjectionToken | OptionalFactoryDependency
-    >
-    const userImports = (options.imports ?? []) as NonNullable<
-      DynamicModule['imports']
-    >
+    const { inject, userImports, useFactory } = resolveFactoryOptions<
+      TInject,
+      RestModuleOptions
+    >(options)
 
     return {
       module: RestModule,
@@ -430,7 +434,7 @@ export class RestModule {
           imports: userImports,
           inject,
           useFactory: async (...args: unknown[]) => {
-            const opts = await options.useFactory(...args)
+            const opts = await useFactory(...args)
             return opts.axios ?? {}
           },
         }),
@@ -445,7 +449,7 @@ export class RestModule {
         //    referentially transparent (NestJS docs require it).
         {
           provide: REST_MODULE_OPTIONS,
-          useFactory: options.useFactory,
+          useFactory,
           inject,
         },
         // 2. HttpService re-binding. CRITICAL: the class-level `@Module({...})`
@@ -493,7 +497,7 @@ export class RestModule {
             opts: RestModuleOptions,
           ): RestClient => new RestClient(
             httpService,
-            resolveResilience(opts) ?? ResilencePresets.CONSERVATIVE,
+            resolveResilience(opts) ?? ResiliencePresets.CONSERVATIVE,
             opts.hooks,
           ),
           inject: [HttpService, REST_MODULE_OPTIONS],

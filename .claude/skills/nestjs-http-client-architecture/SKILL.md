@@ -287,7 +287,7 @@ new RestClient(httpService, resolveResilience(opts))
 RestModule.forRootAsync({
   useFactory: () => ({
     axios: { baseURL: 'https://api.example.com', timeout: 5_000 },
-    resilience: ResilencePresets.CONSERVATIVE, // timeout:60s stripped automatically
+    resilience: ResiliencePresets.CONSERVATIVE, // timeout:60s stripped automatically
   }),
 })
 ```
@@ -521,7 +521,7 @@ The following changes are required by task `improve-library-usability`:
 | src/auth/auth-rest.module.ts | Internal (verified) | 2026-05-01 |
 | src/deduplicate-inflight.decorator.ts | Internal (verified) | 2026-05-01 |
 | src/index.ts | Internal (verified) | 2026-05-01 |
-| src/resilence.policy.ts | Internal (verified) | 2026-05-01 |
+| src/resilience.policy.ts | Internal (verified) | 2026-05-01 |
 | tests/rest-client.e2e.spec.ts | Internal (verified) | 2026-05-01 |
 | node_modules/rxjs/package.json (v7.8.2) | Internal (runtime verified) | 2026-05-01 |
 | package.json (all deps verified present) | Internal | 2026-05-01 |

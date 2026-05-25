@@ -492,4 +492,66 @@ describe('AuthRestModule.registerAsync', () => {
       expect(callConfig.headers).toMatchObject({ Authorization: 'Bearer ac14-token' })
     })
   })
+
+  describe('type inference', () => {
+    // Sentinel injectable used as a class token whose resolved type is
+    // exactly the class instance type. Constructor is parameter-less so the
+    // snippets below do not need a sentinel provider wired into the module.
+    @Injectable()
+    class TypedConfigService {
+      getBaseUrl(): string {
+        return 'https://api.example.com'
+      }
+    }
+
+    // Module exporting `TypedConfigService` so the snippets could be
+    // instantiated end-to-end. The snippets below are only type-checked.
+    @Module({
+      providers: [TypedConfigService],
+      exports: [TypedConfigService],
+    })
+    class TypedConfigModule {}
+
+    it('infers useFactory parameter types from inject (compile-time only)', () => {
+      // Factory parameter `config` is intentionally NOT annotated — the
+      // generic on `registerAsync` resolves it to `TypedConfigService` from
+      // the `inject: [TypedConfigService]` tuple. Calling `getBaseUrl()`
+      // exercises that inference: without it, `config` would be `unknown`
+      // and the property access would fail to compile.
+      const dynamicModule = AuthRestModule.registerAsync({
+        strategy: StubAuthStrategy,
+        imports: [TypedConfigModule],
+        inject: [TypedConfigService],
+        useFactory: config => ({
+          axios: { baseURL: config.getBaseUrl() },
+        }),
+      })
+      expect(dynamicModule.module).toBe(AuthRestModule)
+    })
+
+    it('supports the zero-arg form (no inject) for registerAsync', () => {
+      // The `inject?` field defaults to `readonly []`, so an empty parameter
+      // list on `useFactory` must still compile.
+      const dynamicModule = AuthRestModule.registerAsync({
+        strategy: StubAuthStrategy,
+        useFactory: () => ({
+          axios: { baseURL: 'https://api.example.com' },
+        }),
+      })
+      expect(dynamicModule.module).toBe(AuthRestModule)
+    })
+
+    it('keeps explicit parameter annotations backward-compatible', () => {
+      // Explicit `(config: TypedConfigService)` annotation still compiles.
+      const dynamicModule = AuthRestModule.registerAsync({
+        strategy: StubAuthStrategy,
+        imports: [TypedConfigModule],
+        inject: [TypedConfigService],
+        useFactory: (config: TypedConfigService) => ({
+          axios: { baseURL: config.getBaseUrl() },
+        }),
+      })
+      expect(dynamicModule.module).toBe(AuthRestModule)
+    })
+  })
 })

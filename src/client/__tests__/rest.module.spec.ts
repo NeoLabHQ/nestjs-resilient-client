@@ -1,14 +1,16 @@
 import { HttpService } from '@nestjs/axios'
+import { Injectable, Module } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { TestingModule } from '@nestjs/testing'
 import type { AxiosError, AxiosResponse } from 'axios'
 import { CircuitBreakerPolicy, RetryPolicy, TimeoutPolicy } from 'cockatiel'
 import { of, throwError } from 'rxjs'
 
-import { ResilencePresets } from '../../resilence.policy'
+import { ResiliencePresets } from '../../resilience.policy'
 import type { HooksConfig } from '../hookable-http.service'
 import type { ResilanceConfig } from '../resilance.config'
 import { RestClient } from '../rest.client'
+import type { ResolveInjectedDeps } from '../../dynamic-module'
 import {
   REST_MODULE_OPTIONS,
   RestModule,
@@ -470,8 +472,8 @@ describe('resolveResilience truth table', () => {
     // Other CONSERVATIVE fields MUST still be present (retry + circuitBreaker)
     // — the helper only tweaks `timeout`. If a future refactor accidentally
     // dropped the rest of the preset, this assertion catches it.
-    expect(result?.retry).toBe(ResilencePresets.CONSERVATIVE.retry)
-    expect(result?.circuitBreaker).toBe(ResilencePresets.CONSERVATIVE.circuitBreaker)
+    expect(result?.retry).toBe(ResiliencePresets.CONSERVATIVE.retry)
+    expect(result?.circuitBreaker).toBe(ResiliencePresets.CONSERVATIVE.circuitBreaker)
   })
 
   it('AC-2: axios.timeout > 0 AND resilience present → user resilience preserved unchanged', () => {
@@ -572,5 +574,111 @@ describe('RestModule.registerAsync hooks wiring (AC-13)', () => {
       'get',
       expect.objectContaining({ url: '/x', config: expect.any(Object) }),
     )
+  })
+})
+
+/**
+ * Compile-time assertions that the `useFactory` parameter list is inferred
+ * from the `inject` tuple. These tests intentionally do NOT compile any
+ * `expect(...)` calls — their value lies in the `tsc --noEmit` pass. If a
+ * future refactor regresses the inference (e.g. the generic is dropped or
+ * the `inject` tuple loses its `const` modifier), TypeScript will fail to
+ * compile this file and the regression surfaces at build time.
+ */
+describe('RestModule type inference', () => {
+  // Sentinel injectable used as a class token whose resolved type is
+  // exactly the class instance type. Constructor is parameter-less so we
+  // do not need to wire a sentinel provider to make these snippets compile.
+  @Injectable()
+  class TypedConfigService {
+    getBaseUrl(): string {
+      return 'https://api.example.com'
+    }
+  }
+
+  // A bare module that provides `TypedConfigService` so the snippets below
+  // could be compiled against a real DI graph if executed. The snippets in
+  // the assertions below are not executed — they are only type-checked.
+  @Module({
+    providers: [TypedConfigService],
+    exports: [TypedConfigService],
+  })
+  class TypedConfigModule {}
+
+  it('infers useFactory parameter types from inject in registerAsync (compile-time only)', () => {
+    // The factory parameter `config` is intentionally NOT annotated — the
+    // generic on `registerAsync` resolves it to `TypedConfigService` from
+    // the `inject: [TypedConfigService]` tuple. Calling
+    // `config.getBaseUrl()` exercises that inference: without it, `config`
+    // would be `unknown` and the property access would fail to compile.
+    const dynamicModule = RestModule.registerAsync({
+      imports: [TypedConfigModule],
+      inject: [TypedConfigService],
+      useFactory: config => ({
+        axios: { baseURL: config.getBaseUrl() },
+      }),
+    })
+    expect(dynamicModule.module).toBe(RestModule)
+  })
+
+  it('infers useFactory parameter types from inject in fromHttpService (compile-time only)', () => {
+    // Symmetric assertion for `fromHttpService` — also generic-typed.
+    const httpStub = {
+      get: jest.fn(() => of(successResponse)),
+      axiosRef: { defaults: {} } as HttpService['axiosRef'],
+    } as unknown as HttpService
+
+    const dynamicModule = RestModule.fromHttpService({
+      imports: [TypedConfigModule],
+      inject: [TypedConfigService],
+      useFactory: config => ({
+        httpService: httpStub,
+        // Inference also flows into the body — `config.getBaseUrl()` is a
+        // string, so the inferred return type matches RestFromHttpServiceOptions.
+        // The `getBaseUrl()` call is the load-bearing inference probe.
+        resilience: {
+          retry: { maxAttempts: 1, backoff: 0, shouldRetry: () => true },
+          fallback: { valueOrFactory: config.getBaseUrl() },
+        },
+      }),
+    })
+    expect(dynamicModule.module).toBe(RestModule)
+  })
+
+  it('supports the zero-arg form (no inject) for registerAsync', () => {
+    // The `inject?` field defaults to `readonly []`, so an empty parameter
+    // list on `useFactory` must still compile. Inference for the parameter
+    // tuple defaults to an empty tuple here.
+    const dynamicModule = RestModule.registerAsync({
+      useFactory: () => ({
+        axios: { baseURL: 'https://api.example.com' },
+      }),
+    })
+    expect(dynamicModule.module).toBe(RestModule)
+  })
+
+  it('keeps explicit parameter annotations backward-compatible', () => {
+    // Explicit `(config: TypedConfigService)` annotation still compiles.
+    // The generic widens to accept either the inferred or the annotated
+    // shape — the assertion proves the existing call sites (which use
+    // explicit annotations) continue to work unchanged.
+    const dynamicModule = RestModule.registerAsync({
+      imports: [TypedConfigModule],
+      inject: [TypedConfigService],
+      useFactory: (config: TypedConfigService) => ({
+        axios: { baseURL: config.getBaseUrl() },
+      }),
+    })
+    expect(dynamicModule.module).toBe(RestModule)
+  })
+
+  it('ResolveInjectedDeps maps a class-token tuple to the resolved instance tuple', () => {
+    // Inline compile-time proof — `Resolved` is the tuple TS resolves for
+    // an `inject: [TypedConfigService]` argument. The assignment below
+    // would fail to compile if `ResolveInjectedDeps` widened the element to
+    // anything other than `TypedConfigService`.
+    type Resolved = ResolveInjectedDeps<readonly [typeof TypedConfigService]>
+    const probe: Resolved = [new TypedConfigService()]
+    expect(probe[0]).toBeInstanceOf(TypedConfigService)
   })
 })
