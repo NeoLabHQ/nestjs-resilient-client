@@ -38,20 +38,28 @@ function DeduplicateInflight<TArgs extends unknown[]>(keyBuilder: KeyBuilder<TAr
   return Wrap<{ inflightMap: Map<string, Promise<unknown>> }, TArgs, Promise<unknown>>((method, context) => async (...args: TArgs): Promise<unknown> => {
     const key = keyBuilder(...args)
 
-    const existing = context.target.inflightMap.get(key)
+    // Capture this call's map synchronously, before any `await`. base-decorators
+    // shares a single `context` across all instances of the decorated class and
+    // reassigns `context.target` to the current `this` before every call, so
+    // re-reading `context.target` after the `await` below can resolve to a
+    // DIFFERENT instance (e.g. a second AuthProcessor authenticating concurrently)
+    // — the cleanup would then delete from the wrong map and orphan this entry.
+    const { inflightMap } = context.target
+
+    const existing = inflightMap.get(key)
     if (existing) {
       return existing
     }
 
     const promise = method(...args)
 
-    context.target.inflightMap.set(key, promise)
+    inflightMap.set(key, promise)
 
     try {
       return await promise
     }
     finally {
-      context.target.inflightMap.delete(key)
+      inflightMap.delete(key)
     }
   }, INFLIGHT_EXCLUSION_KEY)
 }

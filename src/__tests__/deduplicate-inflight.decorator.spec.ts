@@ -168,4 +168,64 @@ describe('DeduplicateInflight decorator', () => {
       expect(keyBuilderSpy).toHaveBeenCalledWith('user-1', 'v2')
     })
   })
+
+  describe('shared wrap context across instances', () => {
+    // base-decorators creates the wrap closure once and reassigns its shared
+    // `context.target` to the current `this` before every call. Two instances of
+    // the same decorated class (e.g. two AuthProcessors) therefore share one
+    // context. If the post-`await` cleanup re-reads `context.target`, it can
+    // delete the WRONG instance's entry when calls interleave — orphaning a
+    // settled promise so the owning instance short-circuits forever. Each call
+    // must operate on its own instance's map regardless of later `context.target`
+    // reassignment.
+    it('cleans up the calling instance, not whichever instance called last', async () => {
+      const methodSpy = jest.fn()
+
+      class AuthProcessorLike {
+        readonly inflightMap = new Map<string, Promise<unknown>>()
+        private resolveCurrent?: () => void
+
+        @DeduplicateInflight(() => 'authenticate')
+        async authenticate(): Promise<void> {
+          methodSpy()
+          return new Promise<void>(resolve => {
+            this.resolveCurrent = resolve
+          })
+        }
+
+        settle(): void {
+          this.resolveCurrent?.()
+        }
+      }
+
+      const a = new AuthProcessorLike()
+      const b = new AuthProcessorLike()
+
+      const callA = a.authenticate() // shared context.target = a
+      const callB = b.authenticate() // shared context.target flips to b
+
+      expect(a.inflightMap.has('authenticate')).toBe(true)
+      expect(b.inflightMap.has('authenticate')).toBe(true)
+
+      // Resolve A while the shared context.target points at B.
+      a.settle()
+      await callA
+
+      // A must clean ITS OWN entry; B's in-flight entry must be untouched.
+      expect(a.inflightMap.size).toBe(0)
+      expect(b.inflightMap.has('authenticate')).toBe(true)
+
+      // A must not be wedged: a fresh call actually re-invokes the method
+      // instead of short-circuiting on a stale, orphaned promise.
+      expect(methodSpy).toHaveBeenCalledTimes(2)
+      const callA2 = a.authenticate()
+      expect(methodSpy).toHaveBeenCalledTimes(3)
+
+      // settle the still-in-flight promises so the test leaves no dangling work
+      a.settle()
+      await callA2
+      b.settle()
+      await callB
+    })
+  })
 })
